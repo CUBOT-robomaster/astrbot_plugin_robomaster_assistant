@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 try:
+    from astrbot.api.event import MessageChain
+except Exception:  # pragma: no cover
+    MessageChain = None
+
+try:
     import astrbot.api.message_components as Comp
 except Exception:  # pragma: no cover
     Comp = None
@@ -45,8 +50,20 @@ class CircuitBreaker:
         return True, ""
 
 
-def plain_chain(text: str) -> list[Any]:
+def plain_chain(text: str) -> Any:
     if Comp is None:
         raise RuntimeError("AstrBot message_components 不可用")
-    return [Comp.Plain(text)]
-
+    chain = [Comp.Plain(text)]
+    if MessageChain is None:
+        return chain
+    try:
+        return MessageChain(chain)
+    except TypeError:
+        message_chain = MessageChain()
+        if hasattr(message_chain, "chain"):
+            message_chain.chain = chain
+            return message_chain
+        message = getattr(message_chain, "message", None)
+        if callable(message):
+            return message(text)
+        return chain
