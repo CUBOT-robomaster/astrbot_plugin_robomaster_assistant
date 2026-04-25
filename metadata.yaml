@@ -1,0 +1,10 @@
+name: astrbot_plugin_robomaster_assistant
+display_name: RoboMaster赛事助手
+desc: 提供 RoboMaster 规则手册检索、RM 官网公告监控和 RoboMaster 赛事状态通知。
+version: 0.5.0
+author: EmberLuo
+repo: ""
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - lark

@@ -1,0 +1,8 @@
+pypdf
+jieba
+rank-bm25
+rapidfuzz
+PyMuPDF
+httpx
+beautifulsoup4
+lark-oapi>=1.2.0
