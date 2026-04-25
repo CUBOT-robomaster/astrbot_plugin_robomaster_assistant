@@ -8,28 +8,6 @@ RoboMaster赛事助手是一个 AstrBot 插件，提供三类能力：
 
 插件目前支持 QQ/OneBot、QQ 官方接口和飞书。
 
-## 安装
-
-将本目录放入 AstrBot 插件目录：
-
-```text
-data/plugins/astrbot_plugin_robomaster_assistant
-```
-
-安装依赖：
-
-```bash
-pip install -r requirements.txt
-```
-
-默认手册目录为：
-
-```text
-data/rm_manuals
-```
-
-可在 AstrBot WebUI 的插件配置中修改 `manual_search.manual_dir`。
-
 ## 命令
 
 规则手册检索：
