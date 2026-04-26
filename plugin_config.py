@@ -5,12 +5,8 @@ from typing import Any
 
 from astrbot.api import logger
 
-try:
-    from .constants import CONFIG_GROUPS
-    from .privacy import mask_identifier
-except ImportError:  # pragma: no cover - direct module loading
-    from constants import CONFIG_GROUPS
-    from privacy import mask_identifier
+from .constants import CONFIG_GROUPS
+from .privacy import mask_identifier
 
 
 class ConfigSessionMixin:

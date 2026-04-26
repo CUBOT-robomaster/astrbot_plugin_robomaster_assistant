@@ -7,59 +7,32 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-try:
-    import astrbot.api.message_components as Comp
-except Exception:  # pragma: no cover - local tests may run without AstrBot
-    Comp = None
-
-try:
-    from .search_engine import ManualSearchIndex, SearchResult, rebuild_index
-    from .pdf_screenshot import PdfScreenshotError, render_pdf_page
-    from .announce_monitor import (
-        announcement_url,
-        format_announcement_event,
-        main_context_hash,
-        parse_announcement_html,
-    )
-    from .match_monitor import (
-        DJI_CURRENT_API_URL,
-        DJI_SCHEDULE_API_URL,
-        MatchEvent,
-        detect_match_events,
-    )
-    from .monitor_state import MonitorState
-    from .notification import CircuitBreaker, plain_chain
-    from .lark_enhance_card import send_lark_card
-    from .constants import DEFAULT_MANUAL_DIR, DISPLAY_NAME, NO_RESULT_TEXT, PLUGIN_NAME
-    from .plugin_config import ConfigSessionMixin
-    from .privacy import mask_identifier, mask_url
-    from .storage import legacy_index_path, legacy_state_path, plugin_index_path, plugin_state_path
-except ImportError:  # pragma: no cover - compatible with direct main.py loading
-    from search_engine import ManualSearchIndex, SearchResult, rebuild_index
-    from pdf_screenshot import PdfScreenshotError, render_pdf_page
-    from announce_monitor import (
-        announcement_url,
-        format_announcement_event,
-        main_context_hash,
-        parse_announcement_html,
-    )
-    from match_monitor import (
-        DJI_CURRENT_API_URL,
-        DJI_SCHEDULE_API_URL,
-        MatchEvent,
-        detect_match_events,
-    )
-    from monitor_state import MonitorState
-    from notification import CircuitBreaker, plain_chain
-    from lark_enhance_card import send_lark_card
-    from constants import DEFAULT_MANUAL_DIR, DISPLAY_NAME, NO_RESULT_TEXT, PLUGIN_NAME
-    from plugin_config import ConfigSessionMixin
-    from privacy import mask_identifier, mask_url
-    from storage import legacy_index_path, legacy_state_path, plugin_index_path, plugin_state_path
+from .announce_monitor import (
+    announcement_url,
+    format_announcement_event,
+    main_context_hash,
+    parse_announcement_html,
+)
+from .constants import DEFAULT_MANUAL_DIR, DISPLAY_NAME, NO_RESULT_TEXT, PLUGIN_NAME
+from .lark_enhance_card import send_lark_card
+from .match_monitor import (
+    DJI_CURRENT_API_URL,
+    DJI_SCHEDULE_API_URL,
+    MatchEvent,
+    detect_match_events,
+)
+from .monitor_state import MonitorState
+from .notification import CircuitBreaker, plain_chain
+from .pdf_screenshot import PdfScreenshotError, render_pdf_page
+from .plugin_config import ConfigSessionMixin
+from .privacy import mask_identifier, mask_url
+from .search_engine import ManualSearchIndex, SearchResult, rebuild_index
+from .storage import legacy_index_path, legacy_state_path, plugin_index_path, plugin_state_path
 
 
 @dataclass
@@ -91,6 +64,7 @@ class Main(ConfigSessionMixin, Star):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            logger.warning("无法获取事件循环，监控任务未启动。")
             return
         if self._config_bool("announce_enabled", False):
             self.monitor_tasks.append(loop.create_task(self._announce_loop()))

@@ -2,27 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-try:
-    from .constants import LEGACY_PLUGIN_NAME, PLUGIN_NAME
-except ImportError:  # pragma: no cover - direct module loading
-    from constants import LEGACY_PLUGIN_NAME, PLUGIN_NAME
+from astrbot.api.star import StarTools
 
-
-def astrbot_data_path() -> Path:
-    try:
-        from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
-        return Path(get_astrbot_data_path())
-    except Exception:
-        return Path.cwd() / "data"
+from .constants import LEGACY_PLUGIN_NAME, PLUGIN_NAME
 
 
 def plugin_data_dir() -> Path:
-    return astrbot_data_path() / "plugin_data" / PLUGIN_NAME
+    return Path(StarTools.get_data_dir(PLUGIN_NAME))
 
 
 def legacy_plugin_data_dir() -> Path:
-    return astrbot_data_path() / "plugin_data" / LEGACY_PLUGIN_NAME
+    return plugin_data_dir().parent / LEGACY_PLUGIN_NAME
 
 
 def plugin_index_path() -> Path:
