@@ -19,11 +19,10 @@ env/
 
 *.pdf
 tests/
+*.part
+*.download
+
 data/
 plugin_data/
-index.json
-rm_monitor_state.json
-images/
-*.png
 
 *.log

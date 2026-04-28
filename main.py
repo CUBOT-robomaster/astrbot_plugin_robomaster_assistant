@@ -280,7 +280,7 @@ class Main(ConfigSessionMixin, Star):
         yield event.plain_result(
             "开始更新规则手册\n"
             f"链接：{url}\n"
-            f"目标目录：{plugin_manual_dir()}"
+            f"目标目录：{self._manual_dir()}"
             f"{multi_url_notice}"
         )
 
@@ -334,7 +334,7 @@ class Main(ConfigSessionMixin, Star):
             raise ManualDownloadError("多个下载链接生成了相同文件名，请调整下载链接")
 
         staged, staged_skipped = self._filter_latest_staged_manuals(staged)
-        manual_dir = plugin_manual_dir()
+        manual_dir = Path(self._manual_dir()).expanduser()
         manual_dir.mkdir(parents=True, exist_ok=True)
         plans = [plan_manual_promotion(item, manual_dir) for item in staged]
         skipped = staged_skipped + [
@@ -1089,13 +1089,10 @@ class Main(ConfigSessionMixin, Star):
         return self.index_path.parent / "images"
 
     def _manual_dir(self) -> str:
-        configured = self._config_str("manual_dir", DEFAULT_MANUAL_DIR)
-        if configured != DEFAULT_MANUAL_DIR:
+        configured = self._config_str("manual_dir", DEFAULT_MANUAL_DIR).strip()
+        if configured and configured != DEFAULT_MANUAL_DIR:
             return configured
-        managed_dir = plugin_manual_dir()
-        if managed_dir.exists() and any(managed_dir.glob("*.pdf")):
-            return str(managed_dir)
-        return configured
+        return str(plugin_manual_dir())
 
     async def terminate(self):
         """插件卸载时释放内存索引。"""

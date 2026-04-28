@@ -3,7 +3,7 @@ from __future__ import annotations
 PLUGIN_NAME = "astrbot_plugin_robomaster_assistant"
 DISPLAY_NAME = "RoboMaster赛事助手"
 NO_RESULT_TEXT = "未在规则手册中找到可靠依据，请换个关键词试试。"
-DEFAULT_MANUAL_DIR = "data/rm_manuals"
+DEFAULT_MANUAL_DIR = f"data/plugin_data/{PLUGIN_NAME}/manuals"
 
 CONFIG_GROUPS = {
     "manual_dir": ("rule_manual", "manual_search"),

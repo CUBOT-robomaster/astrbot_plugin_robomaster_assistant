@@ -5,15 +5,15 @@
     "hint": "规则手册 PDF 检索、LLM 定位、回复与截图相关配置。",
     "items": {
       "manual_search": {
-        "description": "规则手册检索",
+        "description": "规则手册文件与检索",
         "type": "object",
-        "hint": "PDF 目录、会话权限和关键词检索相关配置。",
+        "hint": "PDF 下载保存目录、扫描目录、会话权限和关键词检索相关配置。",
         "items": {
           "manual_dir": {
-            "description": "规则手册 PDF 目录",
+            "description": "规则手册 PDF 保存与扫描目录",
             "type": "string",
-            "hint": "插件会递归扫描此目录下的 PDF 文件。",
-            "default": "data/rm_manuals"
+            "hint": "管理员命令下载的 PDF 会保存到这里，重建索引时也会递归扫描此目录。默认使用 AstrBot 插件数据目录下的 manuals 目录。",
+            "default": "data/plugin_data/astrbot_plugin_robomaster_assistant/manuals"
           },
           "allowed_sessions": {
             "description": "会话白名单",
