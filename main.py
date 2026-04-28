@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,27 +14,42 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .announce_monitor import (
+from .core.constants import DEFAULT_MANUAL_DIR, DISPLAY_NAME, NO_RESULT_TEXT, PLUGIN_NAME
+from .core.plugin_config import ConfigSessionMixin
+from .core.privacy import mask_identifier, mask_url
+from .core.storage import (
+    plugin_backup_dir,
+    plugin_download_dir,
+    plugin_index_path,
+    plugin_manual_dir,
+    plugin_state_path,
+)
+from .manual.downloader import (
+    ManualDownloadError,
+    PromotionPlan,
+    StagedManual,
+    compare_manual_identity,
+    download_manual_url,
+    manual_identity,
+    plan_manual_promotion,
+)
+from .manual.pdf_screenshot import PdfScreenshotError, render_pdf_page
+from .manual.search_engine import ManualSearchIndex, SearchResult, rebuild_index
+from .monitors.announce_monitor import (
     announcement_url,
     format_announcement_event,
     main_context_hash,
     parse_announcement_html,
 )
-from .constants import DEFAULT_MANUAL_DIR, DISPLAY_NAME, NO_RESULT_TEXT, PLUGIN_NAME
-from .lark_enhance_card import send_lark_card
-from .match_monitor import (
+from .monitors.match_monitor import (
     DJI_CURRENT_API_URL,
     DJI_SCHEDULE_API_URL,
     MatchEvent,
     detect_match_events,
 )
-from .monitor_state import MonitorState
-from .notification import CircuitBreaker, plain_chain
-from .pdf_screenshot import PdfScreenshotError, render_pdf_page
-from .plugin_config import ConfigSessionMixin
-from .privacy import mask_identifier, mask_url
-from .search_engine import ManualSearchIndex, SearchResult, rebuild_index
-from .storage import legacy_index_path, legacy_state_path, plugin_index_path, plugin_state_path
+from .monitors.monitor_state import MonitorState
+from .notifications.lark_enhance_card import send_lark_card
+from .notifications.notification import CircuitBreaker, plain_chain
 
 
 @dataclass
@@ -102,6 +119,25 @@ class Main(ConfigSessionMixin, Star):
             )
             return
         async for result in self._rebuild_and_reply(event):
+            yield result
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def update_manual_plain_text(self, event: AstrMessageEvent):
+        """管理员发送 HTTPS 链接下载并更新规则手册。"""
+        message = self._message_text(event)
+        if message != "更新规则手册" and not message.startswith("更新规则手册 "):
+            return
+        if not self._is_session_allowed(event):
+            return
+        if not self._is_admin(event):
+            self._stop_event(event)
+            yield event.plain_result(
+                "此命令仅管理员可用。请通过 /sid 获取 ID 后让管理员添加权限。"
+            )
+            return
+
+        text = message.removeprefix("更新规则手册").strip()
+        async for result in self._update_manuals_and_reply(event, text):
             yield result
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -224,6 +260,191 @@ class Main(ConfigSessionMixin, Star):
         if stats.errors:
             text += f"\n提示：有 {len(stats.errors)} 个解析警告，详情见日志。"
         yield event.plain_result(text)
+
+    async def _update_manuals_and_reply(self, event: AstrMessageEvent, text: str):
+        self._stop_event(event)
+        urls = self._extract_urls(text)
+        https_urls = [url for url in urls if url.lower().startswith("https://")]
+        if not urls:
+            yield event.plain_result(
+                "请在命令后附上规则手册 PDF 的 HTTPS 下载链接。\n"
+                "示例：更新规则手册 https://example.com/manual.pdf"
+            )
+            return
+        if not https_urls:
+            yield event.plain_result("规则手册更新失败：只支持 HTTPS 下载链接。")
+            return
+
+        url = https_urls[0]
+        multi_url_notice = "\n提示：检测到多个链接，本次只处理第一个 HTTPS 链接。" if len(urls) > 1 else ""
+        yield event.plain_result(
+            "开始更新规则手册\n"
+            f"链接：{url}\n"
+            f"目标目录：{plugin_manual_dir()}"
+            f"{multi_url_notice}"
+        )
+
+        staged: list[StagedManual] = []
+        try:
+            staged.append(
+                await download_manual_url(
+                    url,
+                    plugin_download_dir(),
+                    max_bytes=self._config_int("download_max_mb", 500) * 1024 * 1024,
+                    timeout_seconds=max(10, self._config_int("download_timeout_seconds", 600)),
+                    free_space_buffer_bytes=max(
+                        0,
+                        self._config_int("download_free_space_buffer_mb", 200),
+                    )
+                    * 1024
+                    * 1024,
+                )
+            )
+
+            summary = await self._promote_manuals_and_rebuild(staged)
+        except ManualDownloadError as exc:
+            for staged_manual in staged:
+                staged_manual.path.unlink(missing_ok=True)
+            yield event.plain_result(f"规则手册更新失败：{exc}")
+            return
+        except Exception as exc:
+            for staged_manual in staged:
+                staged_manual.path.unlink(missing_ok=True)
+            logger.warning(f"规则手册更新异常：{exc}")
+            yield event.plain_result(f"规则手册更新失败：{exc}")
+            return
+
+        yield event.plain_result(summary)
+
+    @staticmethod
+    def _extract_urls(text: str) -> list[str]:
+        urls: list[str] = []
+        for match in re.finditer(r"https?://[^\s<>'\"，。；！？，]+", text):
+            url = match.group(0).rstrip("，,。；;！!？?)]）>")
+            if url:
+                urls.append(url)
+        return urls
+
+    async def _promote_manuals_and_rebuild(self, staged: list[StagedManual]) -> str:
+        if not staged:
+            raise ManualDownloadError("没有下载到可更新的规则手册")
+
+        final_names = [item.final_name for item in staged]
+        if len(set(final_names)) != len(final_names):
+            raise ManualDownloadError("多个下载链接生成了相同文件名，请调整下载链接")
+
+        staged, staged_skipped = self._filter_latest_staged_manuals(staged)
+        manual_dir = plugin_manual_dir()
+        manual_dir.mkdir(parents=True, exist_ok=True)
+        plans = [plan_manual_promotion(item, manual_dir) for item in staged]
+        skipped = staged_skipped + [
+            f"{plan.staged.source.name}：{plan.skip_reason}" for plan in plans if plan.skip_reason
+        ]
+        plans = [plan for plan in plans if plan.should_promote]
+
+        for item in staged:
+            if not any(plan.staged is item for plan in plans):
+                item.path.unlink(missing_ok=True)
+
+        if not plans:
+            lines = ["规则手册无需更新"]
+            if skipped:
+                lines.extend(skipped)
+            return "\n".join(lines)
+
+        backup_dir = plugin_backup_dir() / str(int(time.time() * 1000))
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backups: list[tuple[Path, Path]] = []
+        promoted_paths: list[Path] = []
+        old_index = self.index
+        try:
+            self._backup_obsolete_manuals(plans, backup_dir, backups)
+            for plan in plans:
+                plan.staged.path.replace(plan.target_path)
+                promoted_paths.append(plan.target_path)
+
+            index, stats = await asyncio.to_thread(rebuild_index, str(manual_dir))
+            if not index.pages:
+                reason = stats.errors[0] if stats.errors else "没有可检索文本"
+                raise ManualDownloadError(f"新规则手册索引重建失败：{reason}")
+            await asyncio.to_thread(index.save, self.index_path, str(manual_dir), stats)
+            self.index = index
+        except Exception:
+            for path in promoted_paths:
+                path.unlink(missing_ok=True)
+            for backup_path, original_path in reversed(backups):
+                original_path.parent.mkdir(parents=True, exist_ok=True)
+                backup_path.replace(original_path)
+            self.index = old_index
+            raise
+        finally:
+            for plan in plans:
+                plan.staged.path.unlink(missing_ok=True)
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+
+        lines = [
+            "规则手册更新完成",
+            f"更新文件：{len(promoted_paths)}",
+            f"PDF 文件：{stats.pdf_count}",
+            f"总页数：{stats.page_count}",
+            f"可检索页：{stats.indexed_page_count}",
+        ]
+        if backups:
+            lines.append(f"清理旧版本：{len(backups)}")
+        if skipped:
+            lines.extend(["跳过：", *skipped])
+        if stats.errors:
+            lines.append(f"提示：有 {len(stats.errors)} 个解析警告，详情见日志。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _filter_latest_staged_manuals(
+        staged: list[StagedManual],
+    ) -> tuple[list[StagedManual], list[str]]:
+        latest_by_category: dict[str, StagedManual] = {}
+        skipped: dict[StagedManual, str] = {}
+        for item in staged:
+            identity = manual_identity(item.final_name)
+            if not identity.comparable:
+                continue
+            previous = latest_by_category.get(identity.category)
+            if previous is None:
+                latest_by_category[identity.category] = item
+                continue
+            comparison = compare_manual_identity(identity, manual_identity(previous.final_name))
+            if comparison is None:
+                continue
+            if comparison <= 0:
+                skipped[item] = f"{item.source.name}：同批次已有更新版本"
+            else:
+                skipped[previous] = f"{previous.source.name}：同批次已有更新版本"
+                latest_by_category[identity.category] = item
+
+        kept = [item for item in staged if item not in skipped]
+        for item in skipped:
+            item.path.unlink(missing_ok=True)
+        return kept, list(skipped.values())
+
+    @staticmethod
+    def _backup_obsolete_manuals(
+        plans: list[PromotionPlan],
+        backup_dir: Path,
+        backups: list[tuple[Path, Path]],
+    ) -> None:
+        seen: set[Path] = set()
+        for plan in plans:
+            for old_path in plan.obsolete_paths:
+                if old_path in seen or not old_path.exists():
+                    continue
+                seen.add(old_path)
+                backup_path = backup_dir / old_path.name
+                counter = 1
+                while backup_path.exists():
+                    backup_path = backup_dir / f"{old_path.stem}.{counter}{old_path.suffix}"
+                    counter += 1
+                old_path.replace(backup_path)
+                backups.append((backup_path, old_path))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM订阅通知")
@@ -827,13 +1048,14 @@ class Main(ConfigSessionMixin, Star):
             "示例：规则手册 裁判系统串口协议\n"
             "示例：规则手册 图传链路\n"
             f"PDF 目录：{self._manual_dir()}\n"
+            f"下载目录：{plugin_manual_dir()}\n"
             "回复模式可配置为 text、chain、forward 或 both。\n"
             "飞书会自动使用 chain；forward 仅建议在 OneBot v11/QQ 场景使用。\n"
             "有 LLM 时会先让 LLM 从候选原文页中选择截图依据；没有 LLM 时使用关键词检索。\n"
             "截图被裁切时，可关闭 crop_to_focus 发送整页截图。\n"
             "可在插件配置里设置 allowed_sessions 或 blocked_sessions 限制群聊。\n"
             "结果太长时，可调小 max_results 或 snippet_chars。\n"
-            "管理员可发送：重建规则手册索引"
+            "管理员可发送：更新规则手册 <HTTPS PDF 链接>、重建规则手册索引"
         )
 
     @staticmethod
@@ -857,29 +1079,23 @@ class Main(ConfigSessionMixin, Star):
         return plugin_index_path()
 
     def _load_index(self) -> ManualSearchIndex:
-        index = ManualSearchIndex.load(self.index_path)
-        if index.pages or self.index_path.exists():
-            return index
-        legacy_path = legacy_index_path()
-        return ManualSearchIndex.load(legacy_path) if legacy_path.exists() else index
+        return ManualSearchIndex.load(self.index_path)
 
     def _load_monitor_state(self) -> MonitorState:
         state_path = plugin_state_path()
-        if state_path.exists():
-            return MonitorState(state_path)
-        legacy_path = legacy_state_path()
-        if legacy_path.exists():
-            state = MonitorState(legacy_path)
-            state.path = state_path
-            state.save()
-            return state
         return MonitorState(state_path)
 
     def _image_cache_dir(self) -> Path:
         return self.index_path.parent / "images"
 
     def _manual_dir(self) -> str:
-        return self._config_str("manual_dir", DEFAULT_MANUAL_DIR)
+        configured = self._config_str("manual_dir", DEFAULT_MANUAL_DIR)
+        if configured != DEFAULT_MANUAL_DIR:
+            return configured
+        managed_dir = plugin_manual_dir()
+        if managed_dir.exists() and any(managed_dir.glob("*.pdf")):
+            return str(managed_dir)
+        return configured
 
     async def terminate(self):
         """插件卸载时释放内存索引。"""

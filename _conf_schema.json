@@ -1,230 +1,276 @@
 {
-  "manual_search": {
-    "description": "规则手册检索",
+  "rule_manual": {
+    "description": "规则手册",
     "type": "object",
-    "hint": "PDF 目录、会话权限和关键词检索相关配置。",
+    "hint": "规则手册 PDF 检索、LLM 定位、回复与截图相关配置。",
     "items": {
-      "manual_dir": {
-        "description": "规则手册 PDF 目录",
-        "type": "string",
-        "hint": "插件会递归扫描此目录下的 PDF 文件。",
-        "default": "data/rm_manuals"
+      "manual_search": {
+        "description": "规则手册检索",
+        "type": "object",
+        "hint": "PDF 目录、会话权限和关键词检索相关配置。",
+        "items": {
+          "manual_dir": {
+            "description": "规则手册 PDF 目录",
+            "type": "string",
+            "hint": "插件会递归扫描此目录下的 PDF 文件。",
+            "default": "data/rm_manuals"
+          },
+          "allowed_sessions": {
+            "description": "会话白名单",
+            "type": "string",
+            "hint": "留空表示所有会话可用。可填写群号或 /sid 获取的会话 ID，多个值用逗号、空格或换行分隔。",
+            "default": ""
+          },
+          "blocked_sessions": {
+            "description": "会话黑名单",
+            "type": "string",
+            "hint": "可填写群号或 /sid 获取的会话 ID，多个值用逗号、空格或换行分隔。黑名单优先级高于白名单。",
+            "default": ""
+          },
+          "max_results": {
+            "description": "最多返回结果数",
+            "type": "int",
+            "hint": "无 LLM 或 LLM 失败时最多返回几条依据。",
+            "default": 3
+          },
+          "min_score": {
+            "description": "最低可靠分数",
+            "type": "float",
+            "hint": "越高越保守，低于此分数会提示换关键词。",
+            "default": 0.6
+          }
+        }
       },
-      "allowed_sessions": {
-        "description": "会话白名单",
-        "type": "string",
-        "hint": "留空表示所有会话可用。可填写群号或 /sid 获取的会话 ID，多个值用逗号、空格或换行分隔。",
-        "default": ""
+      "manual_download": {
+        "description": "规则手册下载",
+        "type": "object",
+        "hint": "管理员在群聊发送 HTTPS 链接下载并更新规则手册。",
+        "items": {
+          "download_max_mb": {
+            "description": "单个手册最大 MB",
+            "type": "int",
+            "hint": "超过此大小的 PDF 会被拒绝下载。",
+            "default": 500
+          },
+          "download_timeout_seconds": {
+            "description": "下载超时秒数",
+            "type": "int",
+            "hint": "管理员发送链接下载的总超时时间。",
+            "default": 600
+          },
+          "download_free_space_buffer_mb": {
+            "description": "剩余空间预留 MB",
+            "type": "int",
+            "hint": "下载前要求磁盘在文件大小之外至少保留这些空间。",
+            "default": 200
+          }
+        }
       },
-      "blocked_sessions": {
-        "description": "会话黑名单",
-        "type": "string",
-        "hint": "可填写群号或 /sid 获取的会话 ID，多个值用逗号、空格或换行分隔。黑名单优先级高于白名单。",
-        "default": ""
+      "manual_llm": {
+        "description": "规则手册 LLM 定位",
+        "type": "object",
+        "hint": "有可用模型时，让 LLM 从候选页中选择依据和定位截图。",
+        "items": {
+          "enable_llm_explain": {
+            "description": "启用 LLM 简短解释",
+            "type": "bool",
+            "hint": "解释只基于检索到的原文片段；模型不可用时会自动跳过。",
+            "default": true
+          },
+          "llm_candidate_pages": {
+            "description": "LLM 候选页数",
+            "type": "int",
+            "hint": "有 LLM 时，先用检索召回这些候选页，再让 LLM 从中选择最相关依据。",
+            "default": 10
+          },
+          "llm_candidate_chars": {
+            "description": "LLM 候选片段长度",
+            "type": "int",
+            "hint": "每个候选页提供给 LLM 的原文片段长度。",
+            "default": 260
+          },
+          "llm_select_all_evidence": {
+            "description": "LLM 选择全部必要依据",
+            "type": "bool",
+            "hint": "开启后，LLM 会从候选页中选择所有它认为必须作为依据的位置，而不是受 max_results 限制。",
+            "default": true
+          },
+          "llm_max_results": {
+            "description": "LLM 截图上限",
+            "type": "int",
+            "hint": "0 表示不额外限制，只受 llm_candidate_pages 限制；大于 0 时最多发送这么多张 LLM 选择的截图。",
+            "default": 0
+          }
+        }
       },
-      "max_results": {
-        "description": "最多返回结果数",
-        "type": "int",
-        "hint": "无 LLM 或 LLM 失败时最多返回几条依据。",
-        "default": 3
-      },
-      "min_score": {
-        "description": "最低可靠分数",
-        "type": "float",
-        "hint": "越高越保守，低于此分数会提示换关键词。",
-        "default": 0.6
+      "reply_and_screenshot": {
+        "description": "回复与截图",
+        "type": "object",
+        "hint": "控制群聊回复格式、截图清晰度和裁剪方式。",
+        "items": {
+          "reply_mode": {
+            "description": "回复模式",
+            "type": "string",
+            "hint": "text 只发文字，chain 发一条图文消息，forward 发 QQ 合并转发消息记录，both 发完整文字和截图。",
+            "default": "chain"
+          },
+          "snippet_chars": {
+            "description": "每条原文片段长度",
+            "type": "int",
+            "hint": "过长会影响群聊阅读体验。",
+            "default": 120
+          },
+          "lark_split_text_and_images": {
+            "description": "飞书文字图片分开发送",
+            "type": "bool",
+            "hint": "飞书混合图文 MessageChain 可能丢失文字。开启后先发文字说明，再发图片。",
+            "default": true
+          },
+          "image_zoom": {
+            "description": "PDF 截图清晰度",
+            "type": "float",
+            "hint": "越高越清晰，图片也越大。建议 1.5 到 2.2。",
+            "default": 1.8
+          },
+          "image_cache_seconds": {
+            "description": "截图缓存保留秒数",
+            "type": "int",
+            "hint": "默认保留 1 天，旧截图会在生成新截图时清理。",
+            "default": 86400
+          },
+          "crop_to_focus": {
+            "description": "按原文定位裁剪截图",
+            "type": "bool",
+            "hint": "有 LLM 时会优先根据 LLM 给出的原文短句裁剪局部截图；裁不到会退回整页。",
+            "default": true
+          },
+          "crop_full_width": {
+            "description": "裁剪时保留整页宽度",
+            "type": "bool",
+            "hint": "开启后只裁剪上下范围，左右保留整页宽度，避免表格和段落被切碎。",
+            "default": true
+          }
+        }
       }
     }
   },
-  "manual_llm": {
-    "description": "规则手册 LLM 定位",
+  "announcement_notification": {
+    "description": "公告通知",
     "type": "object",
-    "hint": "有可用模型时，让 LLM 从候选页中选择依据和定位截图。",
+    "hint": "RoboMaster 官网公告新增、公告正文更新和主动推送目标配置。",
     "items": {
-      "enable_llm_explain": {
-        "description": "启用 LLM 简短解释",
-        "type": "bool",
-        "hint": "解释只基于检索到的原文片段；模型不可用时会自动跳过。",
-        "default": true
+      "rm_notification": {
+        "description": "RM 通知订阅",
+        "type": "object",
+        "hint": "公告和赛事监控的主动推送目标。",
+        "items": {
+          "notify_sessions": {
+            "description": "RM 通知会话",
+            "type": "string",
+            "hint": "主动推送目标，可填写 /sid 或订阅命令获取的 unified_msg_origin，多个值用逗号、空格或换行分隔。",
+            "default": ""
+          },
+          "enable_lark_card_notifications": {
+            "description": "启用飞书卡片通知",
+            "type": "bool",
+            "hint": "复用 AstrBot 飞书适配器的运行时 lark_oapi 客户端发送卡片。需要在飞书会话中执行 RM订阅通知；不可用时自动降级为文本。",
+            "default": false
+          }
+        }
       },
-      "llm_candidate_pages": {
-        "description": "LLM 候选页数",
-        "type": "int",
-        "hint": "有 LLM 时，先用检索召回这些候选页，再让 LLM 从中选择最相关依据。",
-        "default": 10
-      },
-      "llm_candidate_chars": {
-        "description": "LLM 候选片段长度",
-        "type": "int",
-        "hint": "每个候选页提供给 LLM 的原文片段长度。",
-        "default": 260
-      },
-      "llm_select_all_evidence": {
-        "description": "LLM 选择全部必要依据",
-        "type": "bool",
-        "hint": "开启后，LLM 会从候选页中选择所有它认为必须作为依据的位置，而不是受 max_results 限制。",
-        "default": true
-      },
-      "llm_max_results": {
-        "description": "LLM 截图上限",
-        "type": "int",
-        "hint": "0 表示不额外限制，只受 llm_candidate_pages 限制；大于 0 时最多发送这么多张 LLM 选择的截图。",
-        "default": 0
+      "announce_monitor": {
+        "description": "RM 公告监控",
+        "type": "object",
+        "hint": "检测 RoboMaster 官网公告新增和指定公告页面正文变化。",
+        "items": {
+          "announce_enabled": {
+            "description": "开启 RM 公告监控",
+            "type": "bool",
+            "hint": "定时检测 RoboMaster 官网公告新增和指定公告页面更新。",
+            "default": false
+          },
+          "announce_interval_seconds": {
+            "description": "公告检查间隔秒数",
+            "type": "int",
+            "hint": "建议不低于 15 秒。",
+            "default": 60
+          },
+          "announce_last_id": {
+            "description": "公告最后 ID",
+            "type": "int",
+            "hint": "首次监控的起点。插件会检测 last_id + 1 是否存在。",
+            "default": 0
+          },
+          "announce_monitored_pages": {
+            "description": "监控公告页面 ID",
+            "type": "string",
+            "hint": "监控指定公告正文是否变化，多个 ID 用逗号、空格或换行分隔。",
+            "default": ""
+          }
+        }
       }
     }
   },
-  "reply_and_screenshot": {
-    "description": "回复与截图",
+  "match_notification": {
+    "description": "赛事通知",
     "type": "object",
-    "hint": "控制群聊回复格式、截图清晰度和裁剪方式。",
+    "hint": "RoboMaster 赛事状态监控、赛区过滤和外部 Webhook 推送配置。",
     "items": {
-      "reply_mode": {
-        "description": "回复模式",
-        "type": "string",
-        "hint": "text 只发文字，chain 发一条图文消息，forward 发 QQ 合并转发消息记录，both 发完整文字和截图。",
-        "default": "chain"
-      },
-      "snippet_chars": {
-        "description": "每条原文片段长度",
-        "type": "int",
-        "hint": "过长会影响群聊阅读体验。",
-        "default": 120
-      },
-      "lark_split_text_and_images": {
-        "description": "飞书文字图片分开发送",
-        "type": "bool",
-        "hint": "飞书混合图文 MessageChain 可能丢失文字。开启后先发文字说明，再发图片。",
-        "default": true
-      },
-      "image_zoom": {
-        "description": "PDF 截图清晰度",
-        "type": "float",
-        "hint": "越高越清晰，图片也越大。建议 1.5 到 2.2。",
-        "default": 1.8
-      },
-      "image_cache_seconds": {
-        "description": "截图缓存保留秒数",
-        "type": "int",
-        "hint": "默认保留 1 天，旧截图会在生成新截图时清理。",
-        "default": 86400
-      },
-      "crop_to_focus": {
-        "description": "按原文定位裁剪截图",
-        "type": "bool",
-        "hint": "有 LLM 时会优先根据 LLM 给出的原文短句裁剪局部截图；裁不到会退回整页。",
-        "default": true
-      },
-      "crop_full_width": {
-        "description": "裁剪时保留整页宽度",
-        "type": "bool",
-        "hint": "开启后只裁剪上下范围，左右保留整页宽度，避免表格和段落被切碎。",
-        "default": true
-      }
-    }
-  },
-  "rm_notification": {
-    "description": "RM 通知订阅",
-    "type": "object",
-    "hint": "公告和赛事监控的主动推送目标。",
-    "items": {
-      "notify_sessions": {
-        "description": "RM 通知会话",
-        "type": "string",
-        "hint": "主动推送目标，可填写 /sid 或订阅命令获取的 unified_msg_origin，多个值用逗号、空格或换行分隔。",
-        "default": ""
-      },
-      "enable_lark_card_notifications": {
-        "description": "启用飞书卡片通知",
-        "type": "bool",
-        "hint": "复用 AstrBot 飞书适配器的运行时 lark_oapi 客户端发送卡片。需要在飞书会话中执行 RM订阅通知；不可用时自动降级为文本。",
-        "default": false
-      }
-    }
-  },
-  "announce_monitor": {
-    "description": "RM 公告监控",
-    "type": "object",
-    "hint": "检测 RoboMaster 官网公告新增和指定公告页面正文变化。",
-    "items": {
-      "announce_enabled": {
-        "description": "开启 RM 公告监控",
-        "type": "bool",
-        "hint": "定时检测 RoboMaster 官网公告新增和指定公告页面更新。",
-        "default": false
-      },
-      "announce_interval_seconds": {
-        "description": "公告检查间隔秒数",
-        "type": "int",
-        "hint": "建议不低于 15 秒。",
-        "default": 60
-      },
-      "announce_last_id": {
-        "description": "公告最后 ID",
-        "type": "int",
-        "hint": "首次监控的起点。插件会检测 last_id + 1 是否存在。",
-        "default": 0
-      },
-      "announce_monitored_pages": {
-        "description": "监控公告页面 ID",
-        "type": "string",
-        "hint": "监控指定公告正文是否变化，多个 ID 用逗号、空格或换行分隔。",
-        "default": ""
-      }
-    }
-  },
-  "match_monitor": {
-    "description": "RM 赛事监控",
-    "type": "object",
-    "hint": "定时拉取 DJI 赛事接口，识别比赛开始、单局结束和比赛结束。",
-    "items": {
-      "match_monitor_enabled": {
-        "description": "开启 RM 赛事监控",
-        "type": "bool",
+      "match_monitor": {
+        "description": "RM 赛事监控",
+        "type": "object",
         "hint": "定时拉取 DJI 赛事接口，识别比赛开始、单局结束和比赛结束。",
-        "default": false
+        "items": {
+          "match_monitor_enabled": {
+            "description": "开启 RM 赛事监控",
+            "type": "bool",
+            "hint": "定时拉取 DJI 赛事接口，识别比赛开始、单局结束和比赛结束。",
+            "default": false
+          },
+          "match_scan_interval_seconds": {
+            "description": "赛事检查间隔秒数",
+            "type": "int",
+            "hint": "建议不低于 5 秒。",
+            "default": 30
+          },
+          "dji_current_api_url": {
+            "description": "DJI 当前比赛接口",
+            "type": "string",
+            "hint": "current_and_next_matches.json 地址。",
+            "default": "https://pro-robomasters-hz-n5i3.oss-cn-hangzhou.aliyuncs.com/live_json/current_and_next_matches.json"
+          },
+          "dji_schedule_api_url": {
+            "description": "DJI 赛程接口",
+            "type": "string",
+            "hint": "schedule.json 地址，用于比赛结束后尝试补充最终比分。",
+            "default": "https://pro-robomasters-hz-n5i3.oss-cn-hangzhou.aliyuncs.com/live_json/schedule.json"
+          },
+          "match_zone_allowlist": {
+            "description": "赛事监控赛区白名单",
+            "type": "string",
+            "hint": "留空表示全部赛区；可填写赛区名称，多个值用逗号、空格或换行分隔。",
+            "default": ""
+          }
+        }
       },
-      "match_scan_interval_seconds": {
-        "description": "赛事检查间隔秒数",
-        "type": "int",
-        "hint": "建议不低于 5 秒。",
-        "default": 30
-      },
-      "dji_current_api_url": {
-        "description": "DJI 当前比赛接口",
-        "type": "string",
-        "hint": "current_and_next_matches.json 地址。",
-        "default": "https://pro-robomasters-hz-n5i3.oss-cn-hangzhou.aliyuncs.com/live_json/current_and_next_matches.json"
-      },
-      "dji_schedule_api_url": {
-        "description": "DJI 赛程接口",
-        "type": "string",
-        "hint": "schedule.json 地址，用于比赛结束后尝试补充最终比分。",
-        "default": "https://pro-robomasters-hz-n5i3.oss-cn-hangzhou.aliyuncs.com/live_json/schedule.json"
-      },
-      "match_zone_allowlist": {
-        "description": "赛事监控赛区白名单",
-        "type": "string",
-        "hint": "留空表示全部赛区；可填写赛区名称，多个值用逗号、空格或换行分隔。",
-        "default": ""
-      }
-    }
-  },
-  "external_webhook": {
-    "description": "外部 Webhook",
-    "type": "object",
-    "hint": "向外部 HTTP Webhook 推送公告和赛事事件。",
-    "items": {
-      "external_webhook_enabled": {
-        "description": "开启外部 Webhook",
-        "type": "bool",
+      "external_webhook": {
+        "description": "外部 Webhook",
+        "type": "object",
         "hint": "向外部 HTTP Webhook 推送公告和赛事事件。",
-        "default": false
-      },
-      "external_webhook_urls": {
-        "description": "外部 Webhook 地址",
-        "type": "string",
-        "hint": "多个 URL 用逗号、空格或换行分隔。",
-        "default": ""
+        "items": {
+          "external_webhook_enabled": {
+            "description": "开启外部 Webhook",
+            "type": "bool",
+            "hint": "向外部 HTTP Webhook 推送公告和赛事事件。",
+            "default": false
+          },
+          "external_webhook_urls": {
+            "description": "外部 Webhook 地址",
+            "type": "string",
+            "hint": "多个 URL 用逗号、空格或换行分隔。",
+            "default": ""
+          }
+        }
       }
     }
   }

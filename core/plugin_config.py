@@ -140,14 +140,30 @@ class ConfigSessionMixin:
         return bool(value)
 
     def _config_get(self, key: str, default: Any) -> Any:
-        getter = getattr(self.config, "get", None)
-        if callable(getter):
-            group_key = CONFIG_GROUPS.get(key)
-            if group_key:
-                group = getter(group_key, None)
-                group_getter = getattr(group, "get", None)
-                if callable(group_getter):
-                    return group_getter(key, default)
-                if isinstance(group, dict) and key in group:
-                    return group[key]
+        group_path = CONFIG_GROUPS.get(key)
+        if group_path:
+            value = self._nested_config_get(group_path, key)
+            if value is not _MISSING:
+                return value
         return default
+
+    def _nested_config_get(self, group_path: tuple[str, ...], key: str) -> Any:
+        group: Any = self.config
+        for segment in group_path:
+            group = _mapping_get(group, segment)
+            if group is _MISSING:
+                return _MISSING
+
+        return _mapping_get(group, key)
+
+
+_MISSING = object()
+
+
+def _mapping_get(mapping: Any, key: str) -> Any:
+    getter = getattr(mapping, "get", None)
+    if callable(getter):
+        return getter(key, _MISSING)
+    if isinstance(mapping, dict) and key in mapping:
+        return mapping[key]
+    return _MISSING
