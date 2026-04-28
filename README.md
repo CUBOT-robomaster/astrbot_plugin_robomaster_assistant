@@ -4,9 +4,11 @@
 
 # RoboMaster赛事助手
 
-[![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-ff69b4?style=for-the-badge)](https://github.com/AstrBotDevs/AstrBot)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.5.2-blue?style=for-the-badge)](https://github.com/CUBOT-robomaster/astrbot_plugin_robomaster_assistant)
+[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16%2C%3C5-orange?style=for-the-badge)](https://github.com/AstrBotDevs/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](LICENSE)
+[![Platforms](https://img.shields.io/badge/Platforms-QQ%20%7C%20QQ%E5%AE%98%E6%96%B9%20%7C%20%E9%A3%9E%E4%B9%A6-green?style=for-the-badge)](https://github.com/CUBOT-robomaster/astrbot_plugin_robomaster_assistant)
 
 </div>
 

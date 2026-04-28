@@ -6,15 +6,23 @@ import re
 import shutil
 import time
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .core.constants import DEFAULT_MANUAL_DIR, DISPLAY_NAME, NO_RESULT_TEXT, PLUGIN_NAME
+from .core.constants import (
+    DEFAULT_MANUAL_DIR,
+    DISPLAY_NAME,
+    NO_RESULT_TEXT,
+    PLUGIN_NAME,
+    PLUGIN_VERSION,
+)
 from .core.plugin_config import ConfigSessionMixin
 from .core.privacy import mask_identifier, mask_url
 from .core.storage import (
@@ -62,7 +70,7 @@ class LocatedResult:
     PLUGIN_NAME,
     "RoboMaster赛事助手 contributors",
     "RoboMaster赛事助手：规则手册检索、RM 公告监控、赛事监控",
-    "0.5.0",
+    PLUGIN_VERSION,
 )
 class Main(ConfigSessionMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
@@ -75,6 +83,9 @@ class Main(ConfigSessionMixin, Star):
         self._breaker_notice_recover_at = 0.0
         self._lark_clients: dict[str, Any] = {}
         self.monitor_tasks: list[asyncio.Task] = []
+        self._manual_lock = asyncio.Lock()
+        self._announce_lock = asyncio.Lock()
+        self._match_lock = asyncio.Lock()
         self._start_monitor_tasks()
 
     def _start_monitor_tasks(self) -> None:
@@ -238,10 +249,11 @@ class Main(ConfigSessionMixin, Star):
 
     async def _rebuild_and_reply(self, event: AstrMessageEvent):
         self._stop_event(event)
-        manual_dir = self._manual_dir()
-        index, stats = await asyncio.to_thread(rebuild_index, manual_dir)
-        self.index = index
-        await asyncio.to_thread(index.save, self.index_path, manual_dir, stats)
+        async with self._manual_lock:
+            manual_dir = self._manual_dir()
+            index, stats = await asyncio.to_thread(rebuild_index, manual_dir)
+            self.index = index
+            await asyncio.to_thread(index.save, self.index_path, manual_dir, stats)
 
         for error in stats.errors[:10]:
             logger.warning(f"规则手册索引提示：{error}")
@@ -329,74 +341,77 @@ class Main(ConfigSessionMixin, Star):
         if not staged:
             raise ManualDownloadError("没有下载到可更新的规则手册")
 
-        final_names = [item.final_name for item in staged]
-        if len(set(final_names)) != len(final_names):
-            raise ManualDownloadError("多个下载链接生成了相同文件名，请调整下载链接")
+        async with self._manual_lock:
+            final_names = [item.final_name for item in staged]
+            if len(set(final_names)) != len(final_names):
+                raise ManualDownloadError("多个下载链接生成了相同文件名，请调整下载链接")
 
-        staged, staged_skipped = self._filter_latest_staged_manuals(staged)
-        manual_dir = Path(self._manual_dir()).expanduser()
-        manual_dir.mkdir(parents=True, exist_ok=True)
-        plans = [plan_manual_promotion(item, manual_dir) for item in staged]
-        skipped = staged_skipped + [
-            f"{plan.staged.source.name}：{plan.skip_reason}" for plan in plans if plan.skip_reason
-        ]
-        plans = [plan for plan in plans if plan.should_promote]
+            staged, staged_skipped = self._filter_latest_staged_manuals(staged)
+            manual_dir = Path(self._manual_dir()).expanduser()
+            manual_dir.mkdir(parents=True, exist_ok=True)
+            plans = [plan_manual_promotion(item, manual_dir) for item in staged]
+            skipped = staged_skipped + [
+                f"{plan.staged.source.name}：{plan.skip_reason}"
+                for plan in plans
+                if plan.skip_reason
+            ]
+            plans = [plan for plan in plans if plan.should_promote]
 
-        for item in staged:
-            if not any(plan.staged is item for plan in plans):
-                item.path.unlink(missing_ok=True)
+            for item in staged:
+                if not any(plan.staged is item for plan in plans):
+                    item.path.unlink(missing_ok=True)
 
-        if not plans:
-            lines = ["规则手册无需更新"]
+            if not plans:
+                lines = ["规则手册无需更新"]
+                if skipped:
+                    lines.extend(skipped)
+                return "\n".join(lines)
+
+            backup_dir = plugin_backup_dir() / str(int(time.time() * 1000))
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backups: list[tuple[Path, Path]] = []
+            promoted_paths: list[Path] = []
+            old_index = self.index
+            try:
+                self._backup_obsolete_manuals(plans, backup_dir, backups)
+                for plan in plans:
+                    plan.staged.path.replace(plan.target_path)
+                    promoted_paths.append(plan.target_path)
+
+                index, stats = await asyncio.to_thread(rebuild_index, str(manual_dir))
+                if not index.pages:
+                    reason = stats.errors[0] if stats.errors else "没有可检索文本"
+                    raise ManualDownloadError(f"新规则手册索引重建失败：{reason}")
+                await asyncio.to_thread(index.save, self.index_path, str(manual_dir), stats)
+                self.index = index
+            except Exception:
+                for path in promoted_paths:
+                    path.unlink(missing_ok=True)
+                for backup_path, original_path in reversed(backups):
+                    original_path.parent.mkdir(parents=True, exist_ok=True)
+                    backup_path.replace(original_path)
+                self.index = old_index
+                raise
+            finally:
+                for plan in plans:
+                    plan.staged.path.unlink(missing_ok=True)
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+
+            lines = [
+                "规则手册更新完成",
+                f"更新文件：{len(promoted_paths)}",
+                f"PDF 文件：{stats.pdf_count}",
+                f"总页数：{stats.page_count}",
+                f"可检索页：{stats.indexed_page_count}",
+            ]
+            if backups:
+                lines.append(f"清理旧版本：{len(backups)}")
             if skipped:
-                lines.extend(skipped)
+                lines.extend(["跳过：", *skipped])
+            if stats.errors:
+                lines.append(f"提示：有 {len(stats.errors)} 个解析警告，详情见日志。")
             return "\n".join(lines)
-
-        backup_dir = plugin_backup_dir() / str(int(time.time() * 1000))
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backups: list[tuple[Path, Path]] = []
-        promoted_paths: list[Path] = []
-        old_index = self.index
-        try:
-            self._backup_obsolete_manuals(plans, backup_dir, backups)
-            for plan in plans:
-                plan.staged.path.replace(plan.target_path)
-                promoted_paths.append(plan.target_path)
-
-            index, stats = await asyncio.to_thread(rebuild_index, str(manual_dir))
-            if not index.pages:
-                reason = stats.errors[0] if stats.errors else "没有可检索文本"
-                raise ManualDownloadError(f"新规则手册索引重建失败：{reason}")
-            await asyncio.to_thread(index.save, self.index_path, str(manual_dir), stats)
-            self.index = index
-        except Exception:
-            for path in promoted_paths:
-                path.unlink(missing_ok=True)
-            for backup_path, original_path in reversed(backups):
-                original_path.parent.mkdir(parents=True, exist_ok=True)
-                backup_path.replace(original_path)
-            self.index = old_index
-            raise
-        finally:
-            for plan in plans:
-                plan.staged.path.unlink(missing_ok=True)
-            if backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
-
-        lines = [
-            "规则手册更新完成",
-            f"更新文件：{len(promoted_paths)}",
-            f"PDF 文件：{stats.pdf_count}",
-            f"总页数：{stats.page_count}",
-            f"可检索页：{stats.indexed_page_count}",
-        ]
-        if backups:
-            lines.append(f"清理旧版本：{len(backups)}")
-        if skipped:
-            lines.extend(["跳过：", *skipped])
-        if stats.errors:
-            lines.append(f"提示：有 {len(stats.errors)} 个解析警告，详情见日志。")
-        return "\n".join(lines)
 
     @staticmethod
     def _filter_latest_staged_manuals(
@@ -509,10 +524,11 @@ class Main(ConfigSessionMixin, Star):
         yield event.plain_result(f"RM 赛事检查完成，发现 {len(events)} 条通知。")
 
     async def _try_lazy_rebuild(self) -> None:
-        manual_dir = self._manual_dir()
-        index, stats = await asyncio.to_thread(rebuild_index, manual_dir)
-        self.index = index
-        await asyncio.to_thread(index.save, self.index_path, manual_dir, stats)
+        async with self._manual_lock:
+            manual_dir = self._manual_dir()
+            index, stats = await asyncio.to_thread(rebuild_index, manual_dir)
+            self.index = index
+            await asyncio.to_thread(index.save, self.index_path, manual_dir, stats)
         if stats.errors:
             logger.info(f"规则手册索引自动构建完成，提示数：{len(stats.errors)}")
 
@@ -539,6 +555,10 @@ class Main(ConfigSessionMixin, Star):
             await asyncio.sleep(interval)
 
     async def _run_announce_check(self) -> list[Any]:
+        async with self._announce_lock:
+            return await self._run_announce_check_unlocked()
+
+    async def _run_announce_check_unlocked(self) -> list[Any]:
         try:
             import httpx
         except Exception as exc:
@@ -590,6 +610,10 @@ class Main(ConfigSessionMixin, Star):
         return parse_announcement_html(announcement_id, resp.text)
 
     async def _run_match_check(self) -> list[MatchEvent]:
+        async with self._match_lock:
+            return await self._run_match_check_unlocked()
+
+    async def _run_match_check_unlocked(self) -> list[MatchEvent]:
         try:
             import httpx
         except Exception as exc:
@@ -745,15 +769,47 @@ class Main(ConfigSessionMixin, Star):
             return
         try:
             import httpx
-
-            async with httpx.AsyncClient(timeout=10) as client:
-                for url in urls:
-                    try:
-                        await client.post(url, json=body)
-                    except Exception as exc:
-                        logger.warning(f"RM 外部 Webhook 发送失败 {mask_url(url)}: {exc}")
         except Exception as exc:
             logger.warning(f"RM 外部 Webhook 缺少 httpx：{exc}")
+            return
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            for url in urls:
+                if not self._is_allowed_webhook_url(url):
+                    logger.warning(f"RM 外部 Webhook 地址不安全或无效，已跳过：{mask_url(url)}")
+                    continue
+                try:
+                    response = await client.post(url, json=body)
+                    if response.status_code < 200 or response.status_code >= 300:
+                        logger.warning(
+                            "RM 外部 Webhook 返回非成功状态 "
+                            f"{response.status_code}：{mask_url(url)}"
+                        )
+                except Exception as exc:
+                    logger.warning(f"RM 外部 Webhook 发送失败 {mask_url(url)}: {exc}")
+
+    @staticmethod
+    def _is_allowed_webhook_url(url: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return False
+
+        hostname = parsed.hostname.strip().lower()
+        if hostname in {"localhost", "0.0.0.0"} or hostname.endswith(".localhost"):
+            return False
+
+        try:
+            address = ip_address(hostname)
+        except ValueError:
+            return True
+        return not (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        )
 
     async def _explain_with_llm(
         self,
@@ -1048,7 +1104,7 @@ class Main(ConfigSessionMixin, Star):
             "示例：规则手册 裁判系统串口协议\n"
             "示例：规则手册 图传链路\n"
             f"PDF 目录：{self._manual_dir()}\n"
-            f"下载目录：{plugin_manual_dir()}\n"
+            f"临时下载目录：{plugin_download_dir()}\n"
             "回复模式可配置为 text、chain、forward 或 both。\n"
             "飞书会自动使用 chain；forward 仅建议在 OneBot v11/QQ 场景使用。\n"
             "有 LLM 时会先让 LLM 从候选原文页中选择截图依据；没有 LLM 时使用关键词检索。\n"

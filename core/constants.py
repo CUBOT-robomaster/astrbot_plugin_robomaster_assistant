@@ -1,9 +1,34 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 PLUGIN_NAME = "astrbot_plugin_robomaster_assistant"
 DISPLAY_NAME = "RoboMaster赛事助手"
 NO_RESULT_TEXT = "未在规则手册中找到可靠依据，请换个关键词试试。"
 DEFAULT_MANUAL_DIR = f"data/plugin_data/{PLUGIN_NAME}/manuals"
+
+
+def _metadata_version() -> str:
+    # 步骤1: 找到 metadata.yaml 文件的路径
+    # Path(__file__) 是当前文件路径
+    # .parents[1] 向上一级目录(到插件根目录)
+    metadata_path = Path(__file__).resolve().parents[1] / "metadata.yaml"
+
+    try:
+        # 步骤2: 读取文件内容,逐行查找 "version:" 这一行
+        for line in metadata_path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition(":")  # 按 ":" 分割
+            if separator and key.strip() == "version":
+                return value.strip().strip("\"'")  # 去掉空格和引号
+    except OSError:
+        pass
+
+    # 步骤3: 如果找不到或读取出错,返回默认值 "0.0.0"
+    return "0.0.0"
+
+
+# 在模块加载时就执行这个函数,把结果存为常量
+PLUGIN_VERSION = _metadata_version()
 
 CONFIG_GROUPS = {
     "manual_dir": ("rule_manual", "manual_search"),
