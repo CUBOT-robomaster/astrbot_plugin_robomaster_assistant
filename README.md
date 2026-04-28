@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="images/logo.png" width="256" alt="icon">
+<img src="logo.png" width="256" alt="icon">
 
 # RoboMaster赛事助手
 
