@@ -4,6 +4,7 @@ import json
 import math
 import re
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,9 @@ class ManualSearchIndex:
         self.pages = pages or []
         self._tokenized_pages: list[list[str]] = []
         self._bm25: Any | None = None
+        self._tfidf_pages: list[dict[str, float]] = []
+        self._tfidf_norms: list[float] = []
+        self._idf: dict[str, float] = {}
         self._build_runtime_index()
 
     @classmethod
@@ -92,17 +96,25 @@ class ManualSearchIndex:
         if not index_path.exists():
             return cls([])
 
-        data = json.loads(index_path.read_text(encoding="utf-8"))
-        pages = [
-            ManualPage(
-                file_name=item["file_name"],
-                file_path=item["file_path"],
-                page_number=int(item["page_number"]),
-                text=item["text"],
-            )
-            for item in data.get("pages", [])
-            if item.get("text")
-        ]
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("version") != INDEX_VERSION:
+                return cls([])
+            raw_pages = data.get("pages", [])
+            if not isinstance(raw_pages, list):
+                return cls([])
+            pages = [
+                ManualPage(
+                    file_name=str(item["file_name"]),
+                    file_path=str(item["file_path"]),
+                    page_number=int(item["page_number"]),
+                    text=str(item["text"]),
+                )
+                for item in raw_pages
+                if isinstance(item, dict) and item.get("text")
+            ]
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return cls([])
         return cls(pages)
 
     def save(self, index_path: Path, manual_dir: str, stats: RebuildStats) -> None:
@@ -125,6 +137,29 @@ class ManualSearchIndex:
             self._bm25 = BM25Okapi(self._tokenized_pages)
         else:
             self._bm25 = None
+        self._build_vector_index()
+
+    def _build_vector_index(self) -> None:
+        self._tfidf_pages = []
+        self._tfidf_norms = []
+        self._idf = {}
+        if not self._tokenized_pages:
+            return
+
+        doc_count = len(self._tokenized_pages)
+        document_frequency: Counter[str] = Counter()
+        for tokens in self._tokenized_pages:
+            document_frequency.update(set(tokens))
+
+        self._idf = {
+            token: math.log((doc_count + 1) / (frequency + 1)) + 1.0
+            for token, frequency in document_frequency.items()
+        }
+
+        for tokens in self._tokenized_pages:
+            vector = self._tfidf_vector(tokens)
+            self._tfidf_pages.append(vector)
+            self._tfidf_norms.append(self._vector_norm(vector))
 
     def search(
         self,
@@ -166,6 +201,74 @@ class ManualSearchIndex:
 
         results.sort(key=lambda item: item.score, reverse=True)
         return results[: max(1, max_results)]
+
+    def vector_search(
+        self,
+        query: str,
+        *,
+        max_results: int = 3,
+        snippet_chars: int = 180,
+        min_score: float = 0.05,
+    ) -> list[SearchResult]:
+        query = normalize_text(query)
+        query_tokens = tokenize(query)
+        if not query or not query_tokens or not self.pages or not self._idf:
+            return []
+
+        query_vector = self._tfidf_vector(query_tokens)
+        query_norm = self._vector_norm(query_vector)
+        if query_norm <= 0:
+            return []
+
+        results: list[SearchResult] = []
+        for idx, page in enumerate(self.pages):
+            page_vector = self._tfidf_pages[idx] if idx < len(self._tfidf_pages) else {}
+            page_norm = self._tfidf_norms[idx] if idx < len(self._tfidf_norms) else 0.0
+            if page_norm <= 0:
+                continue
+            score = self._cosine_similarity(query_vector, query_norm, page_vector, page_norm)
+            score *= self._page_quality_weight(query, page)
+            if score >= min_score:
+                results.append(
+                    SearchResult(
+                        file_name=page.file_name,
+                        file_path=page.file_path,
+                        page_number=page.page_number,
+                        snippet=self._make_snippet(page.text, query, query_tokens, snippet_chars),
+                        score=score,
+                    )
+                )
+
+        results.sort(key=lambda item: item.score, reverse=True)
+        return results[: max(1, max_results)]
+
+    def _tfidf_vector(self, tokens: list[str]) -> dict[str, float]:
+        counts = Counter(token for token in tokens if token in self._idf)
+        if not counts:
+            return {}
+        total = sum(counts.values())
+        return {
+            token: (count / total) * self._idf[token]
+            for token, count in counts.items()
+        }
+
+    @staticmethod
+    def _vector_norm(vector: dict[str, float]) -> float:
+        return math.sqrt(sum(value * value for value in vector.values()))
+
+    @staticmethod
+    def _cosine_similarity(
+        left: dict[str, float],
+        left_norm: float,
+        right: dict[str, float],
+        right_norm: float,
+    ) -> float:
+        if left_norm <= 0 or right_norm <= 0:
+            return 0.0
+        if len(left) > len(right):
+            left, right = right, left
+        dot = sum(value * right.get(token, 0.0) for token, value in left.items())
+        return dot / (left_norm * right_norm)
 
     @staticmethod
     def _normalize_bm25(score: float) -> float:

@@ -77,17 +77,86 @@
             "hint": "解释只基于检索到的原文片段；模型不可用时会自动跳过。",
             "default": true
           },
+          "retrieval_mode": {
+            "description": "规则手册检索模式",
+            "type": "string",
+            "hint": "auto 在全文按页文本小于预算时直接使用全文 LLM，超过预算时使用 BM25+向量混合检索，失败时退回全文 LLM；hybrid 只用混合检索；full_llm 直接把按页文本输入 LLM；keyword 只用 BM25。",
+            "default": "auto"
+          },
+          "full_manual_provider_id": {
+            "description": "全文手册 LLM",
+            "type": "string",
+            "hint": "用于把规则手册全文按页文本输入 LLM 的模型。请选择支持长上下文的模型；留空则使用当前会话模型。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "query_rewrite_provider_id": {
+            "description": "查询改写 LLM",
+            "type": "string",
+            "hint": "用于把口语化问题改写成适合关键词检索的查询。留空则使用当前会话模型。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "evidence_provider_id": {
+            "description": "候选依据选择 LLM",
+            "type": "string",
+            "hint": "用于从 BM25 候选页中选择依据、生成简短结论和截图定位短句。留空则使用当前会话模型。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "enable_query_rewrite": {
+            "description": "启用 LLM 查询改写",
+            "type": "bool",
+            "hint": "有可用模型时，先把用户问题改写为多条适合关键词检索的查询，再混合召回候选页。",
+            "default": true
+          },
+          "query_rewrite_count": {
+            "description": "查询改写数量",
+            "type": "int",
+            "hint": "每次最多生成多少条改写查询。",
+            "default": 4
+          },
+          "query_rewrite_result_limit": {
+            "description": "每路改写召回上限",
+            "type": "int",
+            "hint": "原始查询和每条改写查询分别最多召回多少页，再合并排序。",
+            "default": 12
+          },
+          "enable_vector_search": {
+            "description": "启用向量检索",
+            "type": "bool",
+            "hint": "使用插件内 TF-IDF 稀疏向量检索补充 BM25 召回，不依赖 AstrBot WebUI 知识库。",
+            "default": true
+          },
+          "vector_result_limit": {
+            "description": "向量召回上限",
+            "type": "int",
+            "hint": "原始查询和每条改写查询分别最多召回多少条向量检索结果。",
+            "default": 12
+          },
+          "vector_min_score": {
+            "description": "向量最低分数",
+            "type": "float",
+            "hint": "向量检索低于此分数的页面会被丢弃。",
+            "default": 0.05
+          },
+          "full_manual_max_chars": {
+            "description": "全文 LLM 最大字符数",
+            "type": "int",
+            "hint": "直接输入全文手册时最多拼接多少字符的按页文本。超过后会截断后续页面。",
+            "default": 500000
+          },
           "llm_candidate_pages": {
             "description": "LLM 候选页数",
             "type": "int",
-            "hint": "有 LLM 时，先用检索召回这些候选页，再让 LLM 从中选择最相关依据。",
+            "hint": "有 LLM 时，先用 BM25 + 向量混合检索召回这些候选页，再让 LLM 从中选择最相关依据。",
             "default": 10
           },
           "llm_candidate_chars": {
             "description": "LLM 候选片段长度",
             "type": "int",
             "hint": "每个候选页提供给 LLM 的原文片段长度。",
-            "default": 260
+            "default": 600
           },
           "llm_select_all_evidence": {
             "description": "LLM 选择全部必要依据",

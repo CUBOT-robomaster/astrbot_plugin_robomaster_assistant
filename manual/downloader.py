@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import re
 import shutil
+import socket
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 
 PDF_HEADER = b"%PDF-"
 CHUNK_SIZE = 1024 * 1024
+MAX_REDIRECTS = 5
+MAX_FILENAME_BYTES = 180
+BLOCKED_HOSTS = {"localhost", "localhost.localdomain"}
 
 
 class ManualDownloadError(RuntimeError):
@@ -59,6 +65,7 @@ def validate_source_url(url: str) -> None:
         raise ManualDownloadError(f"只允许 HTTPS 手册链接：{url}")
     if not parsed.netloc:
         raise ManualDownloadError(f"手册链接缺少域名：{url}")
+    _check_safe_host(parsed.hostname or "", url)
 
 
 async def download_manual_url(
@@ -93,47 +100,56 @@ async def download_manual_source(
     except Exception as exc:
         raise ManualDownloadError(f"缺少 httpx，无法下载规则手册：{exc}") from exc
 
-    validate_source_url(source.url)
+    await _validate_download_url(source.url)
     download_dir.mkdir(parents=True, exist_ok=True)
     final_name = final_filename_for_source(source)
     part_path = download_dir / f"{_safe_stem(source.name)}-{time.time_ns()}.part"
 
     try:
         timeout = httpx.Timeout(timeout_seconds)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            async with client.stream("GET", source.url) as response:
-                if response.status_code >= 400:
-                    raise ManualDownloadError(
-                        f"{source.name} 下载失败：HTTP {response.status_code}"
-                    )
-                expected_size = _content_length(response.headers)
-                _check_size_limit(expected_size, max_bytes, source.name)
-                _check_free_space(download_dir, expected_size, free_space_buffer_bytes)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            current_url = source.url
+            for _ in range(MAX_REDIRECTS + 1):
+                await _validate_download_url(current_url)
+                async with client.stream("GET", current_url) as response:
+                    if 300 <= response.status_code < 400:
+                        current_url = _next_redirect_url(current_url, response.headers, source.name)
+                        continue
+                    if response.status_code >= 400:
+                        raise ManualDownloadError(
+                            f"{source.name} 下载失败：HTTP {response.status_code}"
+                        )
+                    expected_size = _content_length(response.headers)
+                    _check_size_limit(expected_size, max_bytes, source.name)
+                    _check_free_space(download_dir, expected_size, free_space_buffer_bytes)
 
-                size = 0
-                header = b""
-                with part_path.open("wb") as file:
-                    async for chunk in response.aiter_bytes(CHUNK_SIZE):
-                        if not chunk:
-                            continue
-                        if len(header) < len(PDF_HEADER):
-                            missing = len(PDF_HEADER) - len(header)
-                            header += chunk[:missing]
-                            if len(header) == len(PDF_HEADER) and header != PDF_HEADER:
+                    size = 0
+                    header = b""
+                    with part_path.open("wb") as file:
+                        async for chunk in response.aiter_bytes(CHUNK_SIZE):
+                            if not chunk:
+                                continue
+                            if len(header) < len(PDF_HEADER):
+                                missing = len(PDF_HEADER) - len(header)
+                                header += chunk[:missing]
+                                if len(header) == len(PDF_HEADER) and header != PDF_HEADER:
+                                    raise ManualDownloadError(
+                                        f"{source.name} 不是有效 PDF 文件"
+                                    )
+                            size += len(chunk)
+                            if size > max_bytes:
                                 raise ManualDownloadError(
-                                    f"{source.name} 不是有效 PDF 文件"
+                                    f"{source.name} 超过大小限制：{_format_bytes(max_bytes)}"
                                 )
-                        size += len(chunk)
-                        if size > max_bytes:
-                            raise ManualDownloadError(
-                                f"{source.name} 超过大小限制：{_format_bytes(max_bytes)}"
-                            )
-                        file.write(chunk)
+                            file.write(chunk)
 
-                if size == 0:
-                    raise ManualDownloadError(f"{source.name} 下载结果为空")
-                if header != PDF_HEADER:
-                    raise ManualDownloadError(f"{source.name} 不是有效 PDF 文件")
+                    if size == 0:
+                        raise ManualDownloadError(f"{source.name} 下载结果为空")
+                    if header != PDF_HEADER:
+                        raise ManualDownloadError(f"{source.name} 不是有效 PDF 文件")
+                    break
+            else:
+                raise ManualDownloadError(f"{source.name} 重定向次数过多")
     except Exception:
         part_path.unlink(missing_ok=True)
         raise
@@ -164,13 +180,22 @@ def source_name_from_url(url: str) -> str:
     return "规则手册"
 
 
+def _next_redirect_url(current_url: str, headers, source_name: str) -> str:
+    location = str(headers.get("location") or "").strip()
+    if not location:
+        raise ManualDownloadError(f"{source_name} 下载重定向缺少 Location")
+    next_url = urljoin(current_url, location)
+    validate_source_url(next_url)
+    return next_url
+
+
 def sanitize_pdf_filename(name: str) -> str:
     cleaned = re.sub(r"[\x00-\x1f<>:\"/\\|?*]+", "_", name).strip(" ._")
     if not cleaned:
         cleaned = "manual.pdf"
     if not cleaned.lower().endswith(".pdf"):
         cleaned += ".pdf"
-    return cleaned
+    return _limit_filename_bytes(cleaned)
 
 
 def manual_identity(file_name: str) -> ManualIdentity:
@@ -284,3 +309,57 @@ def _format_bytes(size: int) -> str:
     if size >= 1024:
         return f"{size / 1024:.1f} KB"
     return f"{size} B"
+
+
+async def _validate_download_url(url: str) -> None:
+    validate_source_url(url)
+    host = urlparse(url).hostname or ""
+    await asyncio.to_thread(_check_resolved_host, host)
+
+
+def _check_safe_host(host: str, url: str) -> None:
+    host = host.strip("[]").lower().rstrip(".")
+    if not host:
+        raise ManualDownloadError(f"手册链接缺少域名：{url}")
+    if host in BLOCKED_HOSTS or host.endswith(".localhost"):
+        raise ManualDownloadError(f"手册链接指向不安全主机：{url}")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return
+    if _is_blocked_address(address):
+        raise ManualDownloadError(f"手册链接指向内网或保留地址：{url}")
+
+
+def _check_resolved_host(host: str) -> None:
+    host = host.strip("[]").lower().rstrip(".")
+    try:
+        address_infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ManualDownloadError(f"手册链接域名解析失败：{host}") from exc
+    for *_, sockaddr in address_infos:
+        try:
+            address = ipaddress.ip_address(sockaddr[0])
+        except (IndexError, ValueError):
+            continue
+        if _is_blocked_address(address):
+            raise ManualDownloadError(f"手册链接域名解析到内网或保留地址：{host}")
+
+
+def _is_blocked_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+def _limit_filename_bytes(name: str) -> str:
+    suffix = ".pdf"
+    stem = name[:-len(suffix)] if name.lower().endswith(suffix) else name
+    while len(f"{stem}{suffix}".encode("utf-8")) > MAX_FILENAME_BYTES and stem:
+        stem = stem[:-1].rstrip(" ._")
+    return f"{stem or 'manual'}{suffix}"

@@ -5,6 +5,9 @@ import time
 from pathlib import Path
 
 
+MAX_RENDER_PIXELS = 24_000_000
+
+
 class PdfScreenshotError(RuntimeError):
     pass
 
@@ -30,6 +33,8 @@ def render_pdf_page(
         raise PdfScreenshotError(f"PDF 不存在：{source}")
     if page_number < 1:
         raise PdfScreenshotError(f"页码无效：{page_number}")
+    if zoom <= 0:
+        raise PdfScreenshotError(f"缩放比例无效：{zoom}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     cleanup_old_images(output_dir, max_age_seconds=max_age_seconds)
@@ -56,8 +61,14 @@ def render_pdf_page(
             if crop_to_focus and focus_text
             else None
         )
+        _check_render_size(clip or page.rect, zoom)
         pixmap = page.get_pixmap(matrix=matrix, alpha=False, clip=clip)
-        pixmap.save(str(output_path))
+        temp_path = output_dir / f".{cache_key}-{time.time_ns()}.png"
+        try:
+            pixmap.save(str(temp_path))
+            temp_path.replace(output_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
     finally:
         doc.close()
 
@@ -149,3 +160,13 @@ def _cache_key(
         f"{zoom:.2f}:{focus_text[:120]}:{crop_full_width}"
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _check_render_size(rect, zoom: float) -> None:
+    width = max(1, int(rect.width * zoom))
+    height = max(1, int(rect.height * zoom))
+    pixels = width * height
+    if pixels > MAX_RENDER_PIXELS:
+        raise PdfScreenshotError(
+            f"截图尺寸过大：{width}x{height}，请调低 image_zoom 或关闭超大页面截图"
+        )
