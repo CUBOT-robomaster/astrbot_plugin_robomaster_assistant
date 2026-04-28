@@ -26,7 +26,7 @@ from .notifications.service import NotificationService
 class Main(ConfigSessionMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
-        self.config = config or {}
+        self.config = config if config is not None else {}
         self.monitor_state = MonitorState(plugin_state_path())
         self.circuit_breaker = CircuitBreaker()
         self._lark_clients: dict[str, Any] = {}

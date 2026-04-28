@@ -65,7 +65,7 @@ class ManualLlmService:
         vector_min_score = self.config._config_float("vector_min_score", 0.05)
         index = self.index
         result_lists = await asyncio.to_thread(
-            self._search_candidates_sync,
+            _search_candidates_sync,
             index,
             queries,
             vector_enabled,
@@ -93,52 +93,6 @@ class ManualLlmService:
                 result_lists.append(embedding_results)
 
         return merge_search_results_rrf(result_lists, candidate_count)
-
-    def _search_candidates_sync(
-        self,
-        index: ManualSearchIndex,
-        queries: list[str],
-        vector_enabled: bool,
-        candidate_count: int,
-        snippet_chars: int,
-        min_score: float,
-        per_query_limit: int,
-        vector_limit: int,
-        vector_min_score: float,
-    ) -> list[list[SearchResult]]:
-        if len(queries) == 1 and not vector_enabled:
-            return [
-                index.search(
-                    queries[0],
-                    max_results=candidate_count,
-                    snippet_chars=snippet_chars,
-                    min_score=min_score,
-                )
-            ]
-
-        result_lists: list[list[SearchResult]] = []
-        for item in queries:
-            result_lists.append(
-                index.search(
-                    item,
-                    max_results=per_query_limit,
-                    snippet_chars=snippet_chars,
-                    min_score=min_score,
-                )
-            )
-
-        if vector_enabled:
-            for item in queries:
-                result_lists.append(
-                    index.vector_search(
-                        item,
-                        max_results=vector_limit,
-                        snippet_chars=snippet_chars,
-                        min_score=vector_min_score,
-                    )
-                )
-
-        return result_lists
 
     async def rewrite_queries(
         self,
@@ -400,6 +354,52 @@ class ManualLlmService:
         if llm_max_results > 0:
             return max(1, min(llm_max_results, candidate_count))
         return max(1, candidate_count)
+
+
+def _search_candidates_sync(
+    index: ManualSearchIndex,
+    queries: list[str],
+    vector_enabled: bool,
+    candidate_count: int,
+    snippet_chars: int,
+    min_score: float,
+    per_query_limit: int,
+    vector_limit: int,
+    vector_min_score: float,
+) -> list[list[SearchResult]]:
+    if len(queries) == 1 and not vector_enabled:
+        return [
+            index.search(
+                queries[0],
+                max_results=candidate_count,
+                snippet_chars=snippet_chars,
+                min_score=min_score,
+            )
+        ]
+
+    result_lists: list[list[SearchResult]] = []
+    for item in queries:
+        result_lists.append(
+            index.search(
+                item,
+                max_results=per_query_limit,
+                snippet_chars=snippet_chars,
+                min_score=min_score,
+            )
+        )
+
+    if vector_enabled:
+        for item in queries:
+            result_lists.append(
+                index.vector_search(
+                    item,
+                    max_results=vector_limit,
+                    snippet_chars=snippet_chars,
+                    min_score=vector_min_score,
+                )
+            )
+
+    return result_lists
 
 
 def parse_rewritten_queries(text: str, original_query: str, limit: int) -> list[str]:

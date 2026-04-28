@@ -8,6 +8,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
+from ..core.event_platform import is_lark_event
 from .models import LocatedResult, ManualSearchResponse
 from .pdf_screenshot import PdfScreenshotError, render_pdf_page
 
@@ -116,29 +117,6 @@ class ManualReplyBuilder:
         except Exception as exc:
             logger.warning(f"规则手册截图生成异常：{exc}")
         return None
-
-
-def is_lark_event(event: AstrMessageEvent) -> bool:
-    platform_names: list[str] = []
-    getter = getattr(event, "get_platform_name", None)
-    if callable(getter):
-        try:
-            platform_names.append(str(getter()))
-        except Exception:
-            pass
-
-    platform_meta = getattr(event, "platform_meta", None)
-    if platform_meta is not None:
-        platform_names.append(str(getattr(platform_meta, "name", "") or ""))
-
-    message_obj = getattr(event, "message_obj", None)
-    if message_obj is not None:
-        platform_names.append(str(getattr(message_obj, "platform_name", "") or ""))
-        platform_names.append(str(getattr(message_obj, "adapter", "") or ""))
-
-    platform_names.append(str(getattr(event, "unified_msg_origin", "") or ""))
-    platform_text = " ".join(platform_names).lower()
-    return "lark" in platform_text or "feishu" in platform_text
 
 
 def format_results(

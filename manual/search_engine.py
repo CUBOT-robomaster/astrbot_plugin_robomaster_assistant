@@ -74,7 +74,7 @@ def tokenize(text: str) -> list[str]:
     if jieba is not None:
         tokens = [token.strip() for token in jieba.cut(text) if token.strip()]
     else:
-        tokens = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", text)
+        tokens = re.findall(r"[a-z0-9_]+", text)
         chinese = "".join(re.findall(r"[\u4e00-\u9fff]", text))
         tokens.extend(chinese[i : i + 2] for i in range(max(0, len(chinese) - 1)))
 

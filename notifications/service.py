@@ -6,6 +6,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from ..core.network import is_public_url
+from ..core.event_platform import is_lark_event
 from ..core.privacy import mask_identifier, mask_url
 from ..monitors.monitor_state import MonitorState
 from .lark_enhance_card import send_lark_card
@@ -121,29 +122,6 @@ class NotificationService:
                         )
                 except Exception as exc:
                     logger.warning(f"RM 外部 Webhook 发送失败 {mask_url(url)}: {exc}")
-
-
-def is_lark_event(event: AstrMessageEvent) -> bool:
-    platform_names: list[str] = []
-    getter = getattr(event, "get_platform_name", None)
-    if callable(getter):
-        try:
-            platform_names.append(str(getter()))
-        except Exception:
-            pass
-
-    platform_meta = getattr(event, "platform_meta", None)
-    if platform_meta is not None:
-        platform_names.append(str(getattr(platform_meta, "name", "") or ""))
-
-    message_obj = getattr(event, "message_obj", None)
-    if message_obj is not None:
-        platform_names.append(str(getattr(message_obj, "platform_name", "") or ""))
-        platform_names.append(str(getattr(message_obj, "adapter", "") or ""))
-
-    platform_names.append(str(getattr(event, "unified_msg_origin", "") or ""))
-    platform_text = " ".join(platform_names).lower()
-    return "lark" in platform_text or "feishu" in platform_text
 
 
 def lark_chat_id_from_event(event: AstrMessageEvent) -> str:

@@ -12,7 +12,7 @@ from .privacy import mask_identifier
 class ConfigSessionMixin:
     @staticmethod
     def _message_text(event) -> str:
-        return (getattr(event, "message_str", "") or "").strip()
+        return getattr(event, "message_str", "").strip()
 
     @staticmethod
     def _stop_event(event) -> None:

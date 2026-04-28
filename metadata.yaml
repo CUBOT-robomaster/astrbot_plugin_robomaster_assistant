@@ -1,7 +1,7 @@
 name: astrbot_plugin_robomaster_assistant
 display_name: RoboMaster赛事助手
 desc: 提供 RoboMaster 规则手册检索、RM 官网公告监控和 RoboMaster 赛事状态通知。
-version: 0.6.0
+version: 0.6.1
 astrbot_version: ">=4.16,<5"
 author: EmberLuo
 repo: "https://github.com/CUBOT-robomaster/astrbot_plugin_robomaster_assistant"

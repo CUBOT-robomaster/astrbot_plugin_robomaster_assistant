@@ -149,7 +149,13 @@ class ManualEmbeddingRetriever:
             try:
                 raw_vectors = await provider.get_embeddings(texts)
             except Exception:
-                raw_vectors = [await provider.get_embedding(text) for text in texts]
+                raw_vectors = []
+                for text in texts:
+                    try:
+                        raw_vectors.append(await provider.get_embedding(text))
+                    except Exception as exc:
+                        logger.warning(f"规则手册单页嵌入失败，已跳过：{exc}")
+                        raw_vectors.append([])
             for (key, _), vector in zip(batch, raw_vectors):
                 normalized = _normalize_vector(vector)
                 if normalized:
