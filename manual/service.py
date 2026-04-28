@@ -281,6 +281,7 @@ class ManualService:
             "回复模式可配置为 text、chain、forward 或 both。\n"
             "飞书会自动使用 chain；forward 仅建议在 OneBot v11/QQ 场景使用。\n"
             "有 LLM 时会先让 LLM 从候选原文页中选择截图依据；没有 LLM 时使用关键词检索。\n"
+            "可选启用 Embedding 语义检索，与 BM25、TF-IDF 召回结果合并。\n"
             "截图被裁切时，可关闭 crop_to_focus 发送整页截图。\n"
             "可在插件配置里设置 allowed_sessions 或 blocked_sessions 限制群聊。\n"
             "结果太长时，可调小 max_results 或 snippet_chars。\n"

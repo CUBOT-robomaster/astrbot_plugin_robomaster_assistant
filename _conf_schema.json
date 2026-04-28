@@ -140,6 +140,42 @@
             "hint": "向量检索低于此分数的页面会被丢弃。",
             "default": 0.05
           },
+          "enable_embedding_search": {
+            "description": "启用嵌入模型检索",
+            "type": "bool",
+            "hint": "使用 AstrBot 已配置的 Embedding 提供商进行语义召回，并与 BM25、TF-IDF 结果合并。默认关闭，避免额外模型调用成本。",
+            "default": false
+          },
+          "embedding_provider_id": {
+            "description": "嵌入模型提供商 ID",
+            "type": "string",
+            "hint": "填写 AstrBot 服务提供商中 Embedding 类型的提供商 ID。嵌入/重排序没有当前会话默认值，必须显式填写。",
+            "default": ""
+          },
+          "embedding_result_limit": {
+            "description": "嵌入召回上限",
+            "type": "int",
+            "hint": "嵌入模型每次最多召回多少页，再与 BM25、TF-IDF 结果合并。",
+            "default": 12
+          },
+          "embedding_min_score": {
+            "description": "嵌入最低分数",
+            "type": "float",
+            "hint": "嵌入相似度低于此分数的页面会被丢弃。",
+            "default": 0.25
+          },
+          "embedding_page_chars": {
+            "description": "每页嵌入字符数",
+            "type": "int",
+            "hint": "为每页生成嵌入时最多截取多少字符，越大越完整但成本越高。",
+            "default": 1200
+          },
+          "embedding_batch_size": {
+            "description": "嵌入批量大小",
+            "type": "int",
+            "hint": "首次构建嵌入缓存时每批提交多少页文本。提供商不支持批量时会自动降级为逐条请求。",
+            "default": 16
+          },
           "full_manual_max_chars": {
             "description": "全文 LLM 最大字符数",
             "type": "int",

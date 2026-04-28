@@ -8,6 +8,7 @@ from typing import Any, Callable
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
+from .embedding_retriever import ManualEmbeddingRetriever
 from .models import LocatedResult
 from .search_engine import ManualPage, ManualSearchIndex, SearchResult
 
@@ -22,6 +23,7 @@ class ManualLlmService:
         self.context = context
         self.config = config
         self._index_getter = index_getter
+        self.embedding = ManualEmbeddingRetriever(context, config)
 
     @property
     def index(self) -> ManualSearchIndex:
@@ -48,6 +50,10 @@ class ManualLlmService:
             "enable_vector_search",
             True,
         )
+        embedding_enabled = retrieval_mode in {"auto", "hybrid"} and self.config._config_bool(
+            "enable_embedding_search",
+            False,
+        )
         per_query_limit = max(
             candidate_count,
             self.config._config_int("query_rewrite_result_limit", 12),
@@ -58,7 +64,7 @@ class ManualLlmService:
         )
         vector_min_score = self.config._config_float("vector_min_score", 0.05)
         index = self.index
-        return await asyncio.to_thread(
+        result_lists = await asyncio.to_thread(
             self._search_candidates_sync,
             index,
             queries,
@@ -70,6 +76,23 @@ class ManualLlmService:
             vector_limit,
             vector_min_score,
         )
+        if embedding_enabled:
+            embedding_limit = max(
+                candidate_count,
+                self.config._config_int("embedding_result_limit", 12),
+            )
+            embedding_min_score = self.config._config_float("embedding_min_score", 0.25)
+            embedding_results = await self.embedding.search(
+                index,
+                query,
+                max_results=embedding_limit,
+                snippet_chars=snippet_chars,
+                min_score=embedding_min_score,
+            )
+            if embedding_results:
+                result_lists.append(embedding_results)
+
+        return merge_search_results_rrf(result_lists, candidate_count)
 
     def _search_candidates_sync(
         self,
@@ -82,14 +105,16 @@ class ManualLlmService:
         per_query_limit: int,
         vector_limit: int,
         vector_min_score: float,
-    ) -> list[SearchResult]:
+    ) -> list[list[SearchResult]]:
         if len(queries) == 1 and not vector_enabled:
-            return index.search(
-                queries[0],
-                max_results=candidate_count,
-                snippet_chars=snippet_chars,
-                min_score=min_score,
-            )
+            return [
+                index.search(
+                    queries[0],
+                    max_results=candidate_count,
+                    snippet_chars=snippet_chars,
+                    min_score=min_score,
+                )
+            ]
 
         result_lists: list[list[SearchResult]] = []
         for item in queries:
@@ -113,7 +138,7 @@ class ManualLlmService:
                     )
                 )
 
-        return merge_search_results_rrf(result_lists, candidate_count)
+        return result_lists
 
     async def rewrite_queries(
         self,
