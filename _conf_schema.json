@@ -316,6 +316,120 @@
       }
     }
   },
+  "forum_monitor": {
+    "description": "论坛开源监控",
+    "type": "object",
+    "hint": "RoboMaster 论坛非置顶文章监控、LLM 归纳和开源资料查询。",
+    "items": {
+      "forum_crawler": {
+        "description": "论坛抓取",
+        "type": "object",
+        "hint": "使用登录态抓取 RoboMaster 论坛文章列表和详情页。云服务器建议上传本地登录后的 cookies。",
+        "items": {
+          "forum_monitor_enabled": {
+            "description": "开启论坛开源监控",
+            "type": "bool",
+            "hint": "定时抓取 RoboMaster 论坛非置顶文章。首次启用只建库不推送。",
+            "default": false
+          },
+          "forum_scan_interval_seconds": {
+            "description": "开源检查间隔秒数",
+            "type": "int",
+            "hint": "建议不低于 300 秒，过于频繁可能触发论坛风控。",
+            "default": 300
+          },
+          "forum_article_url": {
+            "description": "论坛文章列表地址",
+            "type": "string",
+            "hint": "RoboMaster 论坛文章列表页。",
+            "default": "https://bbs.robomaster.com/article"
+          },
+          "forum_username": {
+            "description": "论坛用户名",
+            "type": "string",
+            "hint": "可选。优先使用 cookies；仅在 cookies 不可用时尝试密码登录。",
+            "default": ""
+          },
+          "forum_password": {
+            "description": "论坛密码",
+            "type": "string",
+            "hint": "可选。云服务器遇到滑块验证时不会自动破解，建议上传 cookies。",
+            "default": ""
+          },
+          "forum_cookies_path": {
+            "description": "论坛 cookies 路径",
+            "type": "string",
+            "hint": "默认位于插件数据目录 forum/cookies.json。支持 Playwright storage_state 或参考项目导出的 cookies 列表。",
+            "default": "data/plugin_data/astrbot_plugin_robomaster_assistant/forum/cookies.json"
+          },
+          "forum_chromium_executable_path": {
+            "description": "Chromium 可执行文件路径",
+            "type": "string",
+            "hint": "可选。留空使用 Playwright 托管 Chromium；也可用环境变量 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH。",
+            "default": ""
+          },
+          "forum_headless": {
+            "description": "无头浏览器模式",
+            "type": "bool",
+            "hint": "云服务器通常保持开启。本地调试登录时可关闭。",
+            "default": true
+          },
+          "forum_user_agent": {
+            "description": "论坛抓取 User-Agent",
+            "type": "string",
+            "hint": "模拟较新的 Chrome 浏览器。",
+            "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          },
+          "forum_list_limit": {
+            "description": "每次检查文章数",
+            "type": "int",
+            "hint": "每次最多处理列表页前多少条非置顶文章。数量越大，详情抓取和摘要成本越高。",
+            "default": 10
+          }
+        }
+      },
+      "forum_summary": {
+        "description": "开源 LLM 归纳",
+        "type": "object",
+        "hint": "对新文章正文生成结构化摘要。留空提供商时不会调用 LLM。",
+        "items": {
+          "forum_summary_provider_id": {
+            "description": "开源摘要 LLM",
+            "type": "string",
+            "hint": "用于归纳新文章。留空则只保存标题、正文和链接，不产生模型费用。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "forum_summary_max_chars": {
+            "description": "单篇摘要最大字符数",
+            "type": "int",
+            "hint": "每篇文章提交给 LLM 的正文字符上限。默认 6000 字符，约 2k-5k tokens。",
+            "default": 6000
+          }
+        }
+      },
+      "forum_query": {
+        "description": "开源查询",
+        "type": "object",
+        "hint": "控制“开源查询”的候选数量和可选 LLM 筛选。",
+        "items": {
+          "forum_query_provider_id": {
+            "description": "开源查询 LLM",
+            "type": "string",
+            "hint": "用于从候选文章中筛选最相关结果。留空使用当前会话模型；没有模型时直接返回关键词检索结果。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "forum_query_max_results": {
+            "description": "开源查询结果数",
+            "type": "int",
+            "hint": "每次最多返回多少篇开源文章。",
+            "default": 5
+          }
+        }
+      }
+    }
+  },
   "match_notification": {
     "description": "赛事通知",
     "type": "object",

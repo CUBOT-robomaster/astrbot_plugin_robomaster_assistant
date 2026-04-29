@@ -6,3 +6,4 @@ PyMuPDF
 httpx
 beautifulsoup4
 lark-oapi>=1.2.0
+playwright

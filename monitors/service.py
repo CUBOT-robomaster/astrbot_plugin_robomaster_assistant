@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
-from astrbot.api import logger
+try:
+    from astrbot.api import logger
+except Exception:  # pragma: no cover
+    import logging
+
+    logger = logging.getLogger(__name__)
 
 from .announce_monitor import (
     announcement_url,
@@ -18,6 +24,7 @@ from .match_monitor import (
     detect_match_events,
 )
 from .monitor_state import MonitorState
+from ..forum.service import ForumService
 from ..notifications.service import NotificationService
 
 
@@ -28,14 +35,17 @@ class MonitorService:
         monitor_state: MonitorState,
         notifications: NotificationService,
         lark_clients: dict[str, Any],
+        forum: ForumService | None = None,
     ):
         self.config = config
         self.monitor_state = monitor_state
         self.notifications = notifications
         self.lark_clients = lark_clients
+        self.forum = forum
         self.tasks: list[asyncio.Task] = []
         self.announce_lock = asyncio.Lock()
         self.match_lock = asyncio.Lock()
+        self.forum_lock = asyncio.Lock()
 
     def start_tasks(self) -> None:
         try:
@@ -47,6 +57,8 @@ class MonitorService:
             self.tasks.append(loop.create_task(self.announce_loop()))
         if self.config._config_bool("match_monitor_enabled", False):
             self.tasks.append(loop.create_task(self.match_loop()))
+        if self.forum is not None and self.config._config_bool("forum_monitor_enabled", False):
+            self.tasks.append(loop.create_task(self.forum_loop()))
 
     async def stop_tasks(self) -> None:
         for task in self.tasks:
@@ -60,12 +72,16 @@ class MonitorService:
             "RM 监控状态\n"
             f"公告监控：{'开启' if self.config._config_bool('announce_enabled', False) else '关闭'}\n"
             f"赛事监控：{'开启' if self.config._config_bool('match_monitor_enabled', False) else '关闭'}\n"
+            f"开源监控：{'开启' if self.config._config_bool('forum_monitor_enabled', False) else '关闭'}\n"
             f"订阅会话：{len(self.monitor_state.sessions)}\n"
             f"飞书卡片通知：{'开启' if self.config._config_bool('enable_lark_card_notifications', False) else '关闭'}\n"
             f"飞书卡片可用会话：{len(self.lark_clients)}\n"
             f"公告 last_id：{data.get('announce_last_id') or self.config._config_int('announce_last_id', 0)}\n"
             f"监控公告页：{len(data.get('announce_page_hashes', {}))}\n"
             f"赛事缓存赛区：{len(data.get('match_previous', {}))}\n"
+            f"开源文章：{self.forum.article_count() if self.forum is not None else 0}\n"
+            f"开源最近检查：{data.get('forum_last_check_at') or 0}\n"
+            f"开源最近错误：{data.get('forum_last_error') or '无'}\n"
             f"后台任务：{sum(1 for task in self.tasks if not task.done())}"
         )
 
@@ -90,6 +106,20 @@ class MonitorService:
             except Exception as exc:
                 logger.warning(f"RM 赛事监控失败：{exc}")
             await asyncio.sleep(interval)
+
+    async def forum_loop(self) -> None:
+        while True:
+            try:
+                await self.run_forum_check()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"RM 开源论坛监控失败：{exc}")
+                self.monitor_state.data["forum_last_error"] = str(exc)
+                self.monitor_state.save()
+            if self.forum is None:
+                return
+            await asyncio.sleep(self.forum.scan_sleep_seconds())
 
     async def run_announce_check(self) -> list[Any]:
         async with self.announce_lock:
@@ -149,6 +179,34 @@ class MonitorService:
     async def run_match_check(self) -> list[MatchEvent]:
         async with self.match_lock:
             return await self.run_match_check_unlocked()
+
+    async def run_forum_check(self) -> list[Any]:
+        async with self.forum_lock:
+            return await self.run_forum_check_unlocked()
+
+    async def run_forum_check_unlocked(self) -> list[Any]:
+        if self.forum is None:
+            return []
+        initialized = bool(self.monitor_state.data.get("forum_initialized", False))
+        events = await self.forum.check(notify=initialized)
+        self.monitor_state.data["forum_initialized"] = True
+        self.monitor_state.data["forum_last_check_at"] = int(time.time())
+        self.monitor_state.data["forum_last_error"] = ""
+        self.monitor_state.save()
+        for article in events:
+            await self.notifications.notify(
+                self.forum.notification_text(article),
+                {
+                    "id": article.id,
+                    "title": article.title,
+                    "url": article.url,
+                    "author": article.author,
+                    "category": article.category,
+                },
+                "forum_article_new",
+            )
+            self.forum.store.mark_notified(article.id)
+        return events
 
     async def run_match_check_unlocked(self) -> list[MatchEvent]:
         try:

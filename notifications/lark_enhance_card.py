@@ -87,5 +87,6 @@ def _event_title(event_type: str, fallback: str) -> str:
         "match_start": "RoboMaster 比赛开始",
         "match_session_end": "RoboMaster 单局结束",
         "match_end": "RoboMaster 比赛结束",
+        "forum_article_new": "RoboMaster 论坛开源更新",
     }
     return titles.get(event_type, fallback)

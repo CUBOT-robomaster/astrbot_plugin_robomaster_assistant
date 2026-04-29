@@ -9,6 +9,7 @@ from astrbot.api.star import Context, Star, register
 from .core.constants import NO_RESULT_TEXT, PLUGIN_NAME, PLUGIN_VERSION
 from .core.plugin_config import ConfigSessionMixin
 from .core.storage import plugin_state_path
+from .forum.service import ForumService
 from .manual.reply import ManualReplyBuilder
 from .manual.service import ManualService
 from .monitors.monitor_state import MonitorState
@@ -32,6 +33,7 @@ class Main(ConfigSessionMixin, Star):
         self._lark_clients: dict[str, Any] = {}
         self.manual = ManualService(context, self)
         self.manual_reply = ManualReplyBuilder(self, self.manual.image_cache_dir)
+        self.forum = ForumService(context, self)
         self.notifications = NotificationService(
             context,
             self,
@@ -44,6 +46,7 @@ class Main(ConfigSessionMixin, Star):
             self.monitor_state,
             self.notifications,
             self._lark_clients,
+            self.forum,
         )
         self.monitors.start_tasks()
 
@@ -113,6 +116,39 @@ class Main(ConfigSessionMixin, Star):
         async for result in self.manual_reply.build(event, response):
             yield result
 
+    @filter.command("开源查询帮助")
+    async def forum_help_command(self, event: AstrMessageEvent):
+        """查看 RoboMaster 论坛开源查询帮助。"""
+        if not self._is_session_allowed(event):
+            return
+        self._stop_event(event)
+        yield event.plain_result(self.forum.help_text())
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def search_forum(self, event: AstrMessageEvent):
+        """监听“开源查询 xxx”并检索论坛开源资料库。"""
+        message = self._message_text(event)
+        if message == "开源查询帮助":
+            if not self._is_session_allowed(event):
+                return
+            self._stop_event(event)
+            yield event.plain_result(self.forum.help_text())
+            return
+
+        if not message.startswith("开源查询 "):
+            return
+        if not self._is_session_allowed(event):
+            return
+
+        query = message.removeprefix("开源查询 ").strip()
+        self._stop_event(event)
+        if not query:
+            yield event.plain_result(self.forum.help_text())
+            return
+
+        response = await self.forum.search(query, event)
+        yield event.plain_result(self.forum.format_search_response(response))
+
     async def _rebuild_and_reply(self, event: AstrMessageEvent):
         self._stop_event(event)
         yield event.plain_result(await self.manual.rebuild())
@@ -181,8 +217,38 @@ class Main(ConfigSessionMixin, Star):
         events = await self.monitors.run_match_check()
         yield event.plain_result(f"RM 赛事检查完成，发现 {len(events)} 条通知。")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("RM开源检查")
+    async def rm_forum_check(self, event: AstrMessageEvent):
+        """立即执行一次 RoboMaster 论坛开源检查。"""
+        if not self._is_session_allowed(event):
+            return
+        self._stop_event(event)
+        events = await self.monitors.run_forum_check()
+        yield event.plain_result(f"RM 开源检查完成，发现 {len(events)} 条新推送。")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("RM开源重建索引")
+    async def rm_forum_rebuild_index(self, event: AstrMessageEvent):
+        """从论坛文章库重建开源资料索引。"""
+        if not self._is_session_allowed(event):
+            return
+        self._stop_event(event)
+        yield event.plain_result(await self.forum.rebuild_index())
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("RM开源导入")
+    async def rm_forum_import(self, event: AstrMessageEvent):
+        """导入 forum/imports 目录中的外部 JSONL 开源文章。"""
+        if not self._is_session_allowed(event):
+            return
+        self._stop_event(event)
+        seen, inserted = await self.forum.import_jsonl()
+        yield event.plain_result(f"RM 开源导入完成\n读取行：{seen}\n新增文章：{inserted}")
+
     async def terminate(self):
         """插件卸载时释放后台任务和内存索引。"""
         await self.monitors.stop_tasks()
+        await self.forum.close()
         self.manual.clear()
         self.monitor_state.save()

@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent
+try:
+    from astrbot.api import logger
+except Exception:  # pragma: no cover
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+try:
+    from astrbot.api.event import AstrMessageEvent
+except Exception:  # pragma: no cover
+    AstrMessageEvent = Any
 
 from ..core.network import is_public_url
 from ..core.event_platform import is_lark_event

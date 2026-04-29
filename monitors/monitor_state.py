@@ -13,6 +13,9 @@ DEFAULT_STATE: dict[str, Any] = {
     "announce_recent_sent": {},
     "match_previous": {},
     "lark_notify_sessions": {},
+    "forum_initialized": False,
+    "forum_last_check_at": 0,
+    "forum_last_error": "",
 }
 
 
