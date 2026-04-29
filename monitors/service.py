@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 try:
@@ -181,15 +182,26 @@ class MonitorService:
         async with self.match_lock:
             return await self.run_match_check_unlocked()
 
-    async def run_forum_check(self) -> list[Any]:
+    async def run_forum_check(
+        self,
+        force_notify: bool = False,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> list[Any]:
         async with self.forum_lock:
-            return await self.run_forum_check_unlocked()
+            return await self.run_forum_check_unlocked(
+                force_notify=force_notify, on_progress=on_progress
+            )
 
-    async def run_forum_check_unlocked(self) -> list[Any]:
+    async def run_forum_check_unlocked(
+        self,
+        force_notify: bool = False,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> list[Any]:
         if self.forum is None:
             return []
         initialized = bool(self.monitor_state.data.get("forum_initialized", False))
-        events = await self.forum.check(notify=initialized)
+        notify = True if force_notify else initialized
+        events = await self.forum.check(notify=notify, on_progress=on_progress)
         self.monitor_state.data["forum_initialized"] = True
         self.monitor_state.data["forum_last_check_at"] = int(time.time())
         self.monitor_state.data["forum_last_error"] = ""

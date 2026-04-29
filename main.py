@@ -14,7 +14,7 @@ from .manual.reply import ManualReplyBuilder
 from .manual.service import ManualService
 from .monitors.monitor_state import MonitorState
 from .monitors.service import MonitorService
-from .notifications.notification import CircuitBreaker
+from .notifications.notification import CircuitBreaker, plain_chain
 from .notifications.service import NotificationService
 
 
@@ -224,8 +224,38 @@ class Main(ConfigSessionMixin, Star):
         if not self._is_session_allowed(event):
             return
         self._stop_event(event)
-        events = await self.monitors.run_forum_check()
-        yield event.plain_result(f"RM 开源检查完成，发现 {len(events)} 条新推送。")
+        yield event.plain_result("正在检查 RM 论坛开源内容...")
+
+        session = getattr(event, "unified_msg_origin", "")
+
+        async def on_progress(text: str):
+            if session:
+                try:
+                    await self.context.send_message(session, plain_chain(text))
+                except Exception:
+                    pass
+
+        try:
+            events = await self.monitors.run_forum_check(
+                force_notify=True, on_progress=on_progress
+            )
+        except Exception as exc:
+            yield event.plain_result(f"RM 开源检查失败：{exc}")
+            return
+
+        count = len(events)
+        if count:
+            lines = [f"RM 开源检查完成，发现 {count} 条新推送："]
+            for idx, article in enumerate(events, start=1):
+                lines.append(f"{idx}. {article.title}")
+                if article.url:
+                    lines.append(f"   {article.url}")
+            yield event.plain_result("\n".join(lines))
+        else:
+            yield event.plain_result(
+                "RM 开源检查完成，没有发现新的开源推送。\n"
+                "列表页访问正常，当前已入库的文章均无更新。"
+            )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM开源重建索引")

@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -55,19 +56,46 @@ class ForumService:
     async def close(self) -> None:
         await self.crawler.close()
 
-    async def check(self, *, notify: bool) -> list[ForumArticle]:
+    async def check(
+        self, *, notify: bool, on_progress: Callable[[str], Awaitable[None]] | None = None
+    ) -> list[ForumArticle]:
         async with self.lock:
+            if on_progress:
+                await on_progress("正在访问 RM 论坛列表页...")
+
             settings = self._crawler_settings()
-            articles = await self.crawler.fetch_articles(settings)
+            try:
+                articles = await self.crawler.fetch_articles(settings)
+            except Exception as exc:
+                if on_progress:
+                    await on_progress(f"列表页访问失败：{exc}")
+                raise
+
+            if on_progress:
+                await on_progress(
+                    f"列表页获取成功，发现 {len(articles)} 篇文章，正在逐一检查详情..."
+                )
+
             new_articles: list[ForumArticle] = []
             for item in articles:
                 stored, inserted = self.store.upsert_article(item)
                 if not inserted:
                     continue
+                if on_progress:
+                    await on_progress(f"发现新文章，正在生成摘要：{item.title}")
                 summarized = await self._summarize_and_store(stored)
                 new_articles.append(summarized)
+
             if new_articles:
+                if on_progress:
+                    await on_progress("正在重建搜索索引...")
                 await self.rebuild_index()
+
+            if on_progress:
+                await on_progress(
+                    f"扫描完成：列表 {len(articles)} 篇，新收录 {len(new_articles)} 篇。"
+                )
+
             return new_articles if notify else []
 
     async def import_jsonl(self) -> tuple[int, int]:
