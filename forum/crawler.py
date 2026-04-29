@@ -28,6 +28,22 @@ DEFAULT_DETAIL_CSS_SELECTOR = (
     ".article-detail-content,"
     ".article-content"
 )
+VOID_TAGS = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+}
 
 
 @dataclass
@@ -70,6 +86,11 @@ class ForumListParser(HTMLParser):
             }
             self.depth = 1
             self.class_stack.append(classes)
+            return
+
+        if self.current is not None and tag in VOID_TAGS:
+            if is_pinned_attrs(attrs_dict, classes):
+                self.current["pinned"] = True
             return
 
         if self.current is not None:
