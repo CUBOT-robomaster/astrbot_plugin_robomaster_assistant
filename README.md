@@ -166,26 +166,29 @@ TF-IDF 向量检索是插件内置的轻量稀疏向量检索，不依赖 AstrBo
 
 ### 开启论坛监控
 
-1. 安装 Playwright 浏览器依赖：
+1. 在配置页面进入 **论坛开源监控** -> **论坛抓取**，打开 **开启论坛开源监控**。
 
-   ```bash
-   pip install playwright
-   python -m playwright install chromium
-   ```
+   默认 **论坛抓取模式** 是 `http`，只使用 `httpx` 和 HTML 解析，不需要安装 Chromium。HTTP 模式会读取 cookies、User-Agent 和 Referer，适合基础监控和轻量部署。
 
-   如果云服务器已经安装了 Chromium，也可以在配置里填写 **Chromium 可执行文件路径**，或设置环境变量 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`。
-
-2. 在本地浏览器登录 RoboMaster 论坛，确认能访问文章内容。云服务器容易因为 IP 风控或滑块验证登录失败，建议把本地登录态导出为 cookies 后上传到：
+2. 可选：在本地浏览器登录 RoboMaster 论坛，确认能访问文章内容。若论坛内容需要登录态，建议把本地登录态导出为 cookies 后上传到：
 
    ```text
    data/plugin_data/astrbot_plugin_robomaster_assistant/forum/cookies.json
    ```
 
-   cookies 等同于账号凭证，只放在自己的服务器上，不要公开提交。
+3. 如果 HTTP 模式遇到风控、登录态或页面渲染问题，再把 **论坛抓取模式** 切换为 `browser`，并安装 Playwright 浏览器依赖：
 
-3. 在配置页面进入 **论坛开源监控** -> **论坛抓取**，打开 **开启论坛开源监控**。
+   ```bash
+   pip install playwright
+   ```
 
-4. 建议检查间隔保持默认 300 秒或更长。插件会复用浏览器实例，每次检查新建页面上下文，并模拟随机等待、滚动和较新的 Chrome User-Agent，降低触发风控的概率。
+   ```bash
+   python -m playwright install chromium
+   ```
+
+   如果云服务器已经安装了 Chromium，也可以在配置里填写 **Chromium 可执行文件路径**，或设置环境变量 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`。
+
+4. 建议检查间隔保持默认 300 秒或更长。browser 模式会复用浏览器实例，每次检查新建页面上下文，并模拟随机等待、滚动和较新的 Chrome User-Agent，降低触发风控的概率。
 
 ### LLM 归纳成本
 
@@ -194,7 +197,7 @@ TF-IDF 向量检索是插件内置的轻量稀疏向量检索，不依赖 AstrBo
 - **开源摘要 LLM**：留空时不会调用模型，只保存文章原文和基础信息。
 - **单篇摘要最大字符数**：默认 6000 字符。粗略估计单篇约 2k 到 5k tokens；默认每次最多处理 10 篇文章，首次建库可能消耗约 20k 到 50k tokens。
 
-详情页正文抓取是本插件新增能力，不是参考 Go 项目已有功能。论坛页面可能由前端异步接口加载正文；如果直接 HTML 提取效果不好，建议先在本地浏览器开发者工具 Network 面板确认详情页正文接口、必要 cookies、User-Agent 和 Referer，再更新抓取策略。
+详情页正文默认按 `article.library-detail-content-detail,.library-detail-content-detail,.article-detail-content,.article-content` 提取。论坛页面可能由前端异步接口加载正文；如果 HTTP 模式无法从 HTML 提取列表或正文，可先上传有效 cookies、调整 **详情正文 CSS selector**，或切换为 `browser` 模式。
 
 ### 开源查询流程
 

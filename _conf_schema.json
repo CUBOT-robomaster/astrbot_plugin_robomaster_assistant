@@ -344,34 +344,44 @@
             "hint": "RoboMaster 论坛文章列表页。",
             "default": "https://bbs.robomaster.com/article"
           },
+          "forum_fetch_mode": {
+            "description": "论坛抓取模式",
+            "type": "string",
+            "hint": "http 为轻量 HTML 抓取，不需要 Chromium；browser 使用 Playwright，适合遇到风控、登录态或页面渲染问题时启用。",
+            "default": "http",
+            "options": [
+              "http",
+              "browser"
+            ]
+          },
           "forum_username": {
             "description": "论坛用户名",
             "type": "string",
-            "hint": "可选。优先使用 cookies；仅在 cookies 不可用时尝试密码登录。",
+            "hint": "可选，仅 browser 模式使用。优先使用 cookies；仅在 cookies 不可用时尝试密码登录。",
             "default": ""
           },
           "forum_password": {
             "description": "论坛密码",
             "type": "string",
-            "hint": "可选。云服务器遇到滑块验证时不会自动破解，建议上传 cookies。",
+            "hint": "可选，仅 browser 模式使用。云服务器遇到滑块验证时不会自动破解，建议上传 cookies。",
             "default": ""
           },
           "forum_cookies_path": {
             "description": "论坛 cookies 路径",
             "type": "string",
-            "hint": "默认位于插件数据目录 forum/cookies.json。支持 Playwright storage_state 或参考项目导出的 cookies 列表。",
+            "hint": "默认位于插件数据目录 forum/cookies.json。HTTP 和 browser 模式均支持 Playwright storage_state 或普通 cookies 列表。",
             "default": "data/plugin_data/astrbot_plugin_robomaster_assistant/forum/cookies.json"
           },
           "forum_chromium_executable_path": {
             "description": "Chromium 可执行文件路径",
             "type": "string",
-            "hint": "可选。留空使用 Playwright 托管 Chromium；也可用环境变量 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH。",
+            "hint": "可选，仅 browser 模式使用。留空使用 Playwright 托管 Chromium；也可用环境变量 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH。",
             "default": ""
           },
           "forum_headless": {
             "description": "无头浏览器模式",
             "type": "bool",
-            "hint": "云服务器通常保持开启。本地调试登录时可关闭。",
+            "hint": "仅 browser 模式使用。云服务器通常保持开启。本地调试登录时可关闭。",
             "default": true
           },
           "forum_user_agent": {
@@ -385,6 +395,18 @@
             "type": "int",
             "hint": "每次最多处理列表页前多少条非置顶文章。数量越大，详情抓取和摘要成本越高。",
             "default": 10
+          },
+          "forum_http_timeout_seconds": {
+            "description": "HTTP 抓取超时秒数",
+            "type": "int",
+            "hint": "仅 http 模式使用。默认 30 秒，最低按 5 秒处理。",
+            "default": 30
+          },
+          "forum_detail_css_selector": {
+            "description": "详情正文 CSS selector",
+            "type": "string",
+            "hint": "HTTP 和 browser 模式共用。多个 selector 用英文逗号分隔，匹配失败时会退回整页文本提取。",
+            "default": "article.library-detail-content-detail,.library-detail-content-detail,.article-detail-content,.article-content"
           }
         }
       },

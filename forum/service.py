@@ -25,7 +25,13 @@ from ..core.storage import (
     plugin_forum_import_dir,
     plugin_forum_index_path,
 )
-from .crawler import DEFAULT_FORUM_URL, DEFAULT_USER_AGENT, ForumCrawler, ForumCrawlerSettings
+from .crawler import (
+    DEFAULT_DETAIL_CSS_SELECTOR,
+    DEFAULT_FORUM_URL,
+    DEFAULT_USER_AGENT,
+    ForumCrawler,
+    ForumCrawlerSettings,
+)
 from .models import ForumArticle, ForumArticleInput, ForumSearchHit, ForumSearchResponse
 from .search_index import ForumSearchIndex
 from .store import ForumArticleStore
@@ -259,6 +265,7 @@ class ForumService:
 
     def _crawler_settings(self) -> ForumCrawlerSettings:
         return ForumCrawlerSettings(
+            fetch_mode=self.config._config_str("forum_fetch_mode", "http"),
             article_url=self.config._config_str("forum_article_url", DEFAULT_FORUM_URL),
             username=self.config._config_str("forum_username", ""),
             password=self.config._config_str("forum_password", ""),
@@ -267,6 +274,11 @@ class ForumService:
             headless=self.config._config_bool("forum_headless", True),
             user_agent=self.config._config_str("forum_user_agent", DEFAULT_USER_AGENT),
             list_limit=max(1, self.config._config_int("forum_list_limit", 10)),
+            http_timeout_seconds=max(5, self.config._config_int("forum_http_timeout_seconds", 30)),
+            detail_css_selector=self.config._config_str(
+                "forum_detail_css_selector",
+                DEFAULT_DETAIL_CSS_SELECTOR,
+            ),
         )
 
 

@@ -10,7 +10,7 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 try:
     from astrbot.api import logger
@@ -27,10 +27,17 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+DEFAULT_DETAIL_CSS_SELECTOR = (
+    "article.library-detail-content-detail,"
+    ".library-detail-content-detail,"
+    ".article-detail-content,"
+    ".article-content"
+)
 
 
 @dataclass
 class ForumCrawlerSettings:
+    fetch_mode: str = "http"
     article_url: str = DEFAULT_FORUM_URL
     username: str = ""
     password: str = ""
@@ -39,6 +46,8 @@ class ForumCrawlerSettings:
     headless: bool = True
     user_agent: str = DEFAULT_USER_AGENT
     list_limit: int = 10
+    http_timeout_seconds: int = 30
+    detail_css_selector: str = DEFAULT_DETAIL_CSS_SELECTOR
 
 
 class ForumListParser(HTMLParser):
@@ -92,11 +101,11 @@ class ForumListParser(HTMLParser):
         active = set().union(*self.class_stack) if self.class_stack else set()
         if "articleItem__title" in active:
             self.current["title"].append(text)
-        elif "articleItem__info-author" in active:
+        elif "articleItem__info-author" in active or "articleItem__nickname" in active:
             self.current["author"].append(text)
-        elif "articleItem__category" in active:
+        elif "articleItem__category" in active or "articleItem__tag--base" in active:
             self.current["category"].append(text)
-        elif "articleItem__info-time" in active:
+        elif "articleItem__info-time" in active or "articleItem__datetime" in active:
             self.current["posted_at"].append(text)
 
     def _finish_current(self) -> None:
@@ -127,12 +136,82 @@ def parse_article_list_html(html: str, base_url: str = DEFAULT_FORUM_URL, limit:
     return parser.articles
 
 
-def extract_detail_text_and_links(html: str) -> tuple[str, list[str]]:
-    html = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", html or "", flags=re.I | re.S)
-    links = extract_links(html)
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = normalize_text(unescape(text))
-    return text, links
+def extract_detail_text_and_links(
+    html: str,
+    css_selector: str = DEFAULT_DETAIL_CSS_SELECTOR,
+) -> tuple[str, list[str]]:
+    source_html = html or ""
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(source_html, "html.parser")
+        selected = soup.select(css_selector) if css_selector.strip() else []
+        container = selected[0] if selected else soup
+        for tag in container.select("script,style,svg,header,footer,nav,noscript"):
+            tag.decompose()
+        selected_html = str(container)
+        links = extract_links(selected_html)
+        text = normalize_text(container.get_text(" ", strip=True))
+        return text, links
+    except Exception:
+        selected_html = select_first_simple_html(source_html, css_selector)
+        cleaned = re.sub(
+            r"<(script|style|svg|header|footer|nav|noscript)\b[^>]*>.*?</\1>",
+            " ",
+            selected_html,
+            flags=re.I | re.S,
+        )
+        links = extract_links(cleaned)
+        text = re.sub(r"<[^>]+>", " ", cleaned)
+        text = normalize_text(unescape(text))
+        return text, links
+
+
+def select_first_simple_html(html: str, css_selector: str) -> str:
+    for selector in (part.strip() for part in (css_selector or "").split(",")):
+        if not selector or any(char in selector for char in " >+~[]:"):
+            continue
+        match = match_simple_selector_html(html, selector)
+        if match:
+            return match
+    return html
+
+
+def match_simple_selector_html(html: str, selector: str) -> str:
+    tag = r"[A-Za-z][\w:-]*"
+    attr_lookahead = ""
+    if selector.startswith("."):
+        attr_lookahead = class_attr_lookahead(selector[1:])
+    elif selector.startswith("#"):
+        attr_lookahead = id_attr_lookahead(selector[1:])
+    elif "." in selector:
+        tag_name, class_name = selector.split(".", 1)
+        if not tag_name or not class_name:
+            return ""
+        tag = re.escape(tag_name)
+        attr_lookahead = class_attr_lookahead(class_name)
+    elif "#" in selector:
+        tag_name, element_id = selector.split("#", 1)
+        if not tag_name or not element_id:
+            return ""
+        tag = re.escape(tag_name)
+        attr_lookahead = id_attr_lookahead(element_id)
+    else:
+        tag = re.escape(selector)
+
+    pattern = rf"<(?P<tag>{tag})\b{attr_lookahead}[^>]*>.*?</(?P=tag)>"
+    matched = re.search(pattern, html or "", flags=re.I | re.S)
+    return matched.group(0) if matched else ""
+
+
+def class_attr_lookahead(class_name: str) -> str:
+    escaped = re.escape(class_name)
+    return rf"(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\b{escaped}\b[^'\"]*['\"])"
+
+
+def id_attr_lookahead(element_id: str) -> str:
+    escaped = re.escape(element_id)
+    return rf"(?=[^>]*\bid\s*=\s*['\"]{escaped}['\"])"
 
 
 def extract_links(text: str) -> list[str]:
@@ -163,6 +242,73 @@ class ForumCrawler:
             await self._close_unlocked()
 
     async def fetch_articles(self, settings: ForumCrawlerSettings) -> list[ForumArticleInput]:
+        mode = (settings.fetch_mode or "http").strip().lower()
+        if mode == "http":
+            return await self._fetch_articles_http(settings)
+        if mode == "browser":
+            return await self._fetch_articles_browser(settings)
+        raise RuntimeError("论坛抓取模式无效，请在配置中选择 http 或 browser。")
+
+    async def _fetch_articles_http(self, settings: ForumCrawlerSettings) -> list[ForumArticleInput]:
+        try:
+            import httpx
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError("论坛 HTTP 模式需要安装 httpx。") from exc
+
+        timeout = max(5, settings.http_timeout_seconds)
+        headers = {
+            "User-Agent": settings.user_agent or DEFAULT_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": settings.article_url,
+        }
+        cookies = load_http_cookies(self._storage_state_path(settings))
+        async with httpx.AsyncClient(
+            headers=headers,
+            cookies=cookies,
+            follow_redirects=True,
+            timeout=timeout,
+        ) as client:
+            response = await client.get(settings.article_url)
+            response.raise_for_status()
+            articles = parse_article_list_html(response.text, settings.article_url, settings.list_limit)
+            if not articles:
+                raise RuntimeError(
+                    "HTTP 模式未从论坛列表页提取到文章。请确认 cookies 有效，"
+                    "或切换 forum_fetch_mode=browser 使用 Playwright。"
+                )
+
+            for article in articles:
+                article.raw_text, article.repo_links, article.detail_error = await self._fetch_detail_http(
+                    client,
+                    article.url,
+                    settings,
+                )
+                await random_sleep(300, 900)
+            return articles
+
+    async def _fetch_detail_http(
+        self,
+        client: Any,
+        url: str,
+        settings: ForumCrawlerSettings,
+    ) -> tuple[str, list[str], str]:
+        try:
+            headers = {"Referer": settings.article_url}
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            text, links = extract_detail_text_and_links(response.text, settings.detail_css_selector)
+            if not text:
+                return "", links, (
+                    "HTTP 模式未从详情页提取到正文。请调整 forum_detail_css_selector，"
+                    "或切换 forum_fetch_mode=browser。"
+                )
+            return text, links, ""
+        except Exception as exc:
+            logger.warning(f"论坛 HTTP 详情抓取失败：{url} {exc}")
+            return "", [], str(exc)
+
+    async def _fetch_articles_browser(self, settings: ForumCrawlerSettings) -> list[ForumArticleInput]:
         async with self._lock:
             context = await self._new_context(settings)
         try:
@@ -181,7 +327,11 @@ class ForumCrawler:
                 await page.close()
 
             for article in articles:
-                article.raw_text, article.repo_links, article.detail_error = await self._fetch_detail(context, article.url)
+                article.raw_text, article.repo_links, article.detail_error = await self._fetch_detail_browser(
+                    context,
+                    article.url,
+                    settings,
+                )
                 await random_sleep(700, 1800)
             return articles
         finally:
@@ -226,7 +376,9 @@ class ForumCrawler:
             from playwright.async_api import async_playwright
         except Exception as exc:  # pragma: no cover - depends on deployment env
             raise RuntimeError(
-                "论坛监控需要安装 Playwright：pip install playwright && python -m playwright install chromium"
+                "论坛 browser 模式需要安装 Playwright："
+                "pip install playwright && python -m playwright install chromium；"
+                "如需轻量运行，请把 forum_fetch_mode 设为 http。"
             ) from exc
         self._playwright = await async_playwright().start()
         launch_kwargs: dict[str, Any] = {
@@ -294,14 +446,19 @@ class ForumCrawler:
         await page.click('button[data-usagetag="login_button"]')
         await page.wait_for_selector("a.articleItem", timeout=60000)
 
-    async def _fetch_detail(self, context: Any, url: str) -> tuple[str, list[str], str]:
+    async def _fetch_detail_browser(
+        self,
+        context: Any,
+        url: str,
+        settings: ForumCrawlerSettings,
+    ) -> tuple[str, list[str], str]:
         page = await context.new_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             await random_sleep(1000, 2000)
             await smooth_scroll(page)
             html = await page.content()
-            text, links = extract_detail_text_and_links(html)
+            text, links = extract_detail_text_and_links(html, settings.detail_css_selector)
             if not text:
                 return "", links, "详情页没有提取到正文"
             return text, links, ""
@@ -356,6 +513,35 @@ class ForumCrawler:
             settings.chromium_executable_path.strip()
             or os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "").strip()
         )
+
+
+def load_http_cookies(path: Path | None) -> Any:
+    try:
+        import httpx
+    except Exception:  # pragma: no cover
+        return None
+
+    cookies = httpx.Cookies()
+    if not path or not path.exists():
+        return cookies
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        cookie_items = data.get("cookies", []) if isinstance(data, dict) else data
+        if not isinstance(cookie_items, list):
+            return cookies
+        for item in cookie_items:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            domain = str(item.get("domain") or urlparse(DEFAULT_FORUM_URL).hostname or "bbs.robomaster.com")
+            cookies.set(
+                str(item.get("name")),
+                str(item.get("value", "")),
+                domain=domain,
+                path=str(item.get("path") or "/"),
+            )
+    except Exception as exc:
+        logger.warning(f"论坛 HTTP cookies 加载失败：{exc}")
+    return cookies
 
 
 async def random_sleep(min_ms: int, max_ms: int) -> None:

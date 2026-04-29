@@ -80,6 +80,7 @@ class MonitorService:
             f"监控公告页：{len(data.get('announce_page_hashes', {}))}\n"
             f"赛事缓存赛区：{len(data.get('match_previous', {}))}\n"
             f"开源文章：{self.forum.article_count() if self.forum is not None else 0}\n"
+            f"开源抓取模式：{self.config._config_str('forum_fetch_mode', 'http')}\n"
             f"开源最近检查：{data.get('forum_last_check_at') or 0}\n"
             f"开源最近错误：{data.get('forum_last_error') or '无'}\n"
             f"后台任务：{sum(1 for task in self.tasks if not task.done())}"
