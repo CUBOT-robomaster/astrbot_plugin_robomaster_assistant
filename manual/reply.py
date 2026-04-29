@@ -165,8 +165,6 @@ def format_image_caption(
 
 
 def build_image_chain(caption: str, image_paths: list[Path]) -> list[Any]:
-    if Comp is None:
-        raise RuntimeError("AstrBot message_components 不可用")
     chain: list[Any] = [Comp.Plain(caption + "\n")]
     for image_path in image_paths:
         chain.append(Comp.Image.fromFileSystem(str(image_path)))
@@ -174,14 +172,10 @@ def build_image_chain(caption: str, image_paths: list[Path]) -> list[Any]:
 
 
 def build_image_only_chain(image_paths: list[Path]) -> list[Any]:
-    if Comp is None:
-        raise RuntimeError("AstrBot message_components 不可用")
     return [Comp.Image.fromFileSystem(str(image_path)) for image_path in image_paths]
 
 
 def build_forward_chain(caption: str, rendered: list[tuple[LocatedResult, Path]]) -> list[Any]:
-    if Comp is None:
-        raise RuntimeError("AstrBot message_components 不可用")
     nodes = [
         Comp.Node(
             uin=10000,

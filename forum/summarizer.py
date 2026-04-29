@@ -5,12 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-try:
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 from .crawler import extract_links
 from .models import ForumArticle

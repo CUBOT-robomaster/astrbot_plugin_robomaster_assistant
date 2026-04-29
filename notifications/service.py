@@ -2,17 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-try:
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-try:
-    from astrbot.api.event import AstrMessageEvent
-except Exception:  # pragma: no cover
-    AstrMessageEvent = Any
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent
 
 from ..core.network import is_public_url
 from ..core.event_platform import is_lark_event
@@ -39,7 +30,9 @@ class NotificationService:
         self.breaker_notice_recover_at = 0.0
 
     async def notify(self, text: str, payload: dict[str, Any], event_type: str) -> None:
+        previous_recover_at = self.circuit_breaker.recovery_timestamp()
         allowed, reason = self.circuit_breaker.allow()
+        self._sync_circuit_breaker_state(previous_recover_at)
         if not allowed:
             logger.warning(f"RM 通知熔断：{reason}")
             await self.notify_breaker_once(reason)
@@ -82,6 +75,11 @@ class NotificationService:
         except Exception as exc:
             logger.warning(f"RM 飞书卡片发送异常，降级文本 {mask_identifier(session)}: {exc}")
             return False
+
+    def _sync_circuit_breaker_state(self, previous_recover_at: float) -> None:
+        recover_at = self.circuit_breaker.recovery_timestamp()
+        if recover_at != previous_recover_at:
+            self.monitor_state.set_notification_circuit_breaker_recover_at(recover_at)
 
     def remember_lark_runtime(self, event: AstrMessageEvent, session: str) -> bool:
         if not is_lark_event(event):

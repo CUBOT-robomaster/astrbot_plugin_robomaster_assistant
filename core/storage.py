@@ -2,17 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-try:
-    from astrbot.api.star import StarTools
-except Exception:  # pragma: no cover
-    StarTools = None
+from astrbot.api.star import StarTools
 
 from .constants import PLUGIN_NAME
 
 
 def plugin_data_dir() -> Path:
-    if StarTools is None:
-        return Path("data/plugin_data") / PLUGIN_NAME
     return Path(StarTools.get_data_dir(PLUGIN_NAME))
 
 

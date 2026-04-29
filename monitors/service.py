@@ -5,12 +5,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-try:
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 from .announce_monitor import (
     announcement_url,
@@ -43,7 +38,7 @@ class MonitorService:
         self.notifications = notifications
         self.lark_clients = lark_clients
         self.forum = forum
-        self.tasks: list[asyncio.Task] = []
+        self.tasks: list[asyncio.Task[Any]] = []
         self.announce_lock = asyncio.Lock()
         self.match_lock = asyncio.Lock()
         self.forum_lock = asyncio.Lock()
@@ -54,18 +49,31 @@ class MonitorService:
         except RuntimeError:
             logger.warning("无法获取事件循环，监控任务未启动。")
             return
-        if self.config._config_bool("announce_enabled", False):
-            self.tasks.append(loop.create_task(self.announce_loop()))
-        if self.config._config_bool("match_monitor_enabled", False):
-            self.tasks.append(loop.create_task(self.match_loop()))
-        if self.forum is not None and self.config._config_bool("forum_monitor_enabled", False):
-            self.tasks.append(loop.create_task(self.forum_loop()))
+        self.tasks = [task for task in self.tasks if not task.done()]
+        active_names = {task.get_name() for task in self.tasks}
+        if (
+            self.config._config_bool("announce_enabled", False)
+            and "rm_announce_monitor" not in active_names
+        ):
+            self.tasks.append(loop.create_task(self.announce_loop(), name="rm_announce_monitor"))
+        if (
+            self.config._config_bool("match_monitor_enabled", False)
+            and "rm_match_monitor" not in active_names
+        ):
+            self.tasks.append(loop.create_task(self.match_loop(), name="rm_match_monitor"))
+        if (
+            self.forum is not None
+            and self.config._config_bool("forum_monitor_enabled", False)
+            and "rm_forum_monitor" not in active_names
+        ):
+            self.tasks.append(loop.create_task(self.forum_loop(), name="rm_forum_monitor"))
 
     async def stop_tasks(self) -> None:
         for task in self.tasks:
             task.cancel()
         if self.tasks:
             await asyncio.gather(*self.tasks, return_exceptions=True)
+        self.tasks.clear()
 
     def status_text(self) -> str:
         data = self.monitor_state.data

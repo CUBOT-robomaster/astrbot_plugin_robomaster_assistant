@@ -4,15 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-try:
-    from astrbot.api.event import MessageChain
-except Exception:  # pragma: no cover
-    MessageChain = None
-
-try:
-    import astrbot.api.message_components as Comp
-except Exception:  # pragma: no cover
-    Comp = None
+from astrbot.api.event import MessageChain
+import astrbot.api.message_components as Comp
 
 
 @dataclass
@@ -29,18 +22,20 @@ class SlidingWindowCounter:
 
 
 class CircuitBreaker:
-    def __init__(self):
+    def __init__(self, recover_at: float = 0.0):
         self.windows = [
             ("每5秒", SlidingWindowCounter(5), 3),
             ("每分钟", SlidingWindowCounter(60), 5),
             ("每小时", SlidingWindowCounter(3600), 15),
         ]
-        self.recover_at = 0.0
+        self.recover_at = float(recover_at or 0)
 
     def allow(self) -> tuple[bool, str]:
         now = time.time()
         if now < self.recover_at:
             return False, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.recover_at))
+        if self.recover_at:
+            self.recover_at = 0.0
         for name, counter, max_count in self.windows:
             count = counter.increment()
             if count > max_count:
@@ -49,21 +44,9 @@ class CircuitBreaker:
                 return False, f"{name}发送数量达到 {count}，超过最大限制 {max_count}，已熔断到 {recover}"
         return True, ""
 
+    def recovery_timestamp(self) -> float:
+        return self.recover_at
+
 
 def plain_chain(text: str) -> Any:
-    if Comp is None:
-        raise RuntimeError("AstrBot message_components 不可用")
-    chain = [Comp.Plain(text)]
-    if MessageChain is None:
-        return chain
-    try:
-        return MessageChain(chain)
-    except TypeError:
-        message_chain = MessageChain()
-        if hasattr(message_chain, "chain"):
-            message_chain.chain = chain
-            return message_chain
-        message = getattr(message_chain, "message", None)
-        if callable(message):
-            return message(text)
-        return chain
+    return MessageChain([Comp.Plain(text)])

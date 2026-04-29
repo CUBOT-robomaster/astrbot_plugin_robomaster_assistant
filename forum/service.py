@@ -8,17 +8,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-try:
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-try:
-    from astrbot.api.event import AstrMessageEvent
-except Exception:  # pragma: no cover
-    AstrMessageEvent = Any
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent
 
 from ..core.storage import (
     plugin_forum_cookies_path,
@@ -52,6 +43,11 @@ class ForumService:
         self.crawler = ForumCrawler()
         self.summarizer = ForumSummarizer(context, config)
         self.lock = asyncio.Lock()
+        self.last_check_stats: dict[str, int] = {
+            "listed": 0,
+            "inserted": 0,
+            "stored": self.store.article_count(),
+        }
 
     async def close(self) -> None:
         await self.crawler.close()
@@ -67,6 +63,11 @@ class ForumService:
             try:
                 articles = await self.crawler.fetch_articles(settings)
             except Exception as exc:
+                self.last_check_stats = {
+                    "listed": 0,
+                    "inserted": 0,
+                    "stored": self.store.article_count(),
+                }
                 if on_progress:
                     await on_progress(f"列表页访问失败：{exc}")
                 raise
@@ -91,9 +92,17 @@ class ForumService:
                     await on_progress("正在重建搜索索引...")
                 await self.rebuild_index()
 
+            self.last_check_stats = {
+                "listed": len(articles),
+                "inserted": len(new_articles),
+                "stored": self.store.article_count(),
+            }
             if on_progress:
                 await on_progress(
-                    f"扫描完成：列表 {len(articles)} 篇，新收录 {len(new_articles)} 篇。"
+                    "扫描完成："
+                    f"列表 {self.last_check_stats['listed']} 篇，"
+                    f"新收录 {self.last_check_stats['inserted']} 篇，"
+                    f"当前入库 {self.last_check_stats['stored']} 篇。"
                 )
 
             return new_articles if notify else []
@@ -195,6 +204,30 @@ class ForumService:
             if article.repo_links:
                 lines.append(f"相关链接：{' '.join(article.repo_links[:3])}")
             lines.append(f"论坛链接：{article.url}")
+        return "\n".join(lines)
+
+    def format_check_response(self, events: list[ForumArticle]) -> str:
+        count = len(events)
+        stats = self.last_check_stats or {}
+        listed = int(stats.get("listed", 0))
+        inserted = int(stats.get("inserted", count))
+        stored = int(stats.get("stored", self.article_count()))
+        if not count:
+            return (
+                "RM 开源检查完成："
+                f"列表 {listed} 篇，新收录 {inserted} 篇，当前入库 {stored} 篇。\n"
+                "没有发现新的开源推送。"
+            )
+
+        lines = [
+            "RM 开源检查完成："
+            f"列表 {listed} 篇，新收录 {inserted} 篇，当前入库 {stored} 篇。",
+            f"发现 {count} 条新推送：",
+        ]
+        for idx, article in enumerate(events, start=1):
+            lines.append(f"{idx}. {article.title}")
+            if article.url:
+                lines.append(f"   {article.url}")
         return "\n".join(lines)
 
     def notification_text(self, article: ForumArticle) -> str:

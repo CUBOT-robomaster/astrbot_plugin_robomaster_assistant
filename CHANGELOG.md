@@ -1,15 +1,15 @@
-main.py:222-258 — rm_forum_check 处理器：
+# Changelog
 
-立即 yield "正在检查 RM 论坛开源内容..." 让用户知道已开始
-创建 on_progress 回调，通过 context.send_message 实时推送进度
-传入 force_notify=True 确保即使是首次检查也返回结果
-用 try/except 捕获异常并报告具体错误
-有新文章时列出标题和链接；无新文章时明确告知"列表页访问正常"
-monitors/service.py:185-204 — run_forum_check / run_forum_check_unlocked：
+## 0.7.1 - 2026-04-30
 
-新增 force_notify 参数，为 True 时忽略 initialized 标志直接返回文章
-新增 on_progress 回调参数，透传给 forum.check()
-forum/service.py:59-99 — check()：
+### Fixed
+- 将 RM 公告、赛事、论坛开源监控任务移动到 AstrBot 初始化完成钩子启动，避免在插件构造阶段启动异步任务。
+- 为后台监控任务启动增加幂等保护，重复触发加载钩子时不会创建重复循环任务。
+- 修复 `RM开源检查` 进度通知发送失败时静默吞异常的问题，现在会记录 warning 日志。
+- 持久化通知熔断恢复时间，插件热重载后继续保留熔断状态。
 
-新增 on_progress 回调，在关键步骤（访问列表页、获取详情、LLM 摘要、重建索引）发送进度消息
-列表页访问失败时通过回调报告错误再抛出
+### Changed
+- 按 AstrBot 官方插件配置文档收紧插件构造函数，直接接收框架传入的 `AstrBotConfig`，不再保留 `None` / `{}` 配置兜底。
+- 合并规则手册帮助与开源查询帮助的重复回复逻辑。
+- 将 `RM开源检查` 的结果格式化逻辑收敛到 `ForumService`，简化命令处理器职责。
+- 移除面向缺失 AstrBot 或旧消息组件接口的兼容分支，运行时代码按当前插件要求的 AstrBot 4.16+ 编写。

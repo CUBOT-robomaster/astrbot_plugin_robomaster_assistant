@@ -16,6 +16,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "forum_initialized": False,
     "forum_last_check_at": 0,
     "forum_last_error": "",
+    "notification_circuit_breaker_recover_at": 0.0,
 }
 
 
@@ -104,3 +105,13 @@ class MonitorState:
         if not isinstance(item, dict):
             return ""
         return str(item.get("chat_id") or "").strip()
+
+    def notification_circuit_breaker_recover_at(self) -> float:
+        try:
+            return float(self.data.get("notification_circuit_breaker_recover_at") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def set_notification_circuit_breaker_recover_at(self, recover_at: float) -> None:
+        self.data["notification_circuit_breaker_recover_at"] = float(recover_at or 0)
+        self.save()

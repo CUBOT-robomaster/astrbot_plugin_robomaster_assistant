@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from astrbot.api import AstrBotConfig
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 from .core.constants import NO_RESULT_TEXT, PLUGIN_NAME, PLUGIN_VERSION
 from .core.plugin_config import ConfigSessionMixin
+from .core.privacy import mask_identifier
 from .core.storage import plugin_state_path
 from .forum.service import ForumService
 from .manual.reply import ManualReplyBuilder
@@ -25,11 +26,13 @@ from .notifications.service import NotificationService
     PLUGIN_VERSION,
 )
 class Main(ConfigSessionMixin, Star):
-    def __init__(self, context: Context, config: AstrBotConfig | None = None):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.config = config if config is not None else {}
+        self.config = config
         self.monitor_state = MonitorState(plugin_state_path())
-        self.circuit_breaker = CircuitBreaker()
+        self.circuit_breaker = CircuitBreaker(
+            recover_at=self.monitor_state.notification_circuit_breaker_recover_at()
+        )
         self._lark_clients: dict[str, Any] = {}
         self.manual = ManualService(context, self)
         self.manual_reply = ManualReplyBuilder(self, self.manual.image_cache_dir)
@@ -48,15 +51,17 @@ class Main(ConfigSessionMixin, Star):
             self._lark_clients,
             self.forum,
         )
+
+    @filter.on_astrbot_loaded()
+    async def on_astrbot_loaded(self):
+        """AstrBot 初始化完成后启动后台监控任务。"""
         self.monitors.start_tasks()
 
     @filter.command("规则手册帮助")
     async def manual_help_command(self, event: AstrMessageEvent):
         """查看 RoboMaster 规则手册检索插件帮助。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        yield event.plain_result(self.manual.help_text())
+        async for result in self._reply_manual_help(event):
+            yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("重建规则手册索引")
@@ -91,10 +96,8 @@ class Main(ConfigSessionMixin, Star):
         """监听“规则手册 xxx”并检索本地 PDF 规则手册。"""
         message = self._message_text(event)
         if message == "规则手册帮助":
-            if not self._is_session_allowed(event):
-                return
-            self._stop_event(event)
-            yield event.plain_result(self.manual.help_text())
+            async for result in self._reply_manual_help(event):
+                yield result
             return
 
         if not message.startswith("规则手册 "):
@@ -119,20 +122,16 @@ class Main(ConfigSessionMixin, Star):
     @filter.command("开源查询帮助")
     async def forum_help_command(self, event: AstrMessageEvent):
         """查看 RoboMaster 论坛开源查询帮助。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        yield event.plain_result(self.forum.help_text())
+        async for result in self._reply_forum_help(event):
+            yield result
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def search_forum(self, event: AstrMessageEvent):
         """监听“开源查询 xxx”并检索论坛开源资料库。"""
         message = self._message_text(event)
         if message == "开源查询帮助":
-            if not self._is_session_allowed(event):
-                return
-            self._stop_event(event)
-            yield event.plain_result(self.forum.help_text())
+            async for result in self._reply_forum_help(event):
+                yield result
             return
 
         if not message.startswith("开源查询 "):
@@ -157,6 +156,18 @@ class Main(ConfigSessionMixin, Star):
         self._stop_event(event)
         async for message in self.manual.update_from_text(text):
             yield event.plain_result(message)
+
+    async def _reply_manual_help(self, event: AstrMessageEvent):
+        if not self._is_session_allowed(event):
+            return
+        self._stop_event(event)
+        yield event.plain_result(self.manual.help_text())
+
+    async def _reply_forum_help(self, event: AstrMessageEvent):
+        if not self._is_session_allowed(event):
+            return
+        self._stop_event(event)
+        yield event.plain_result(self.forum.help_text())
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM订阅通知")
@@ -228,34 +239,24 @@ class Main(ConfigSessionMixin, Star):
 
         session = getattr(event, "unified_msg_origin", "")
 
-        async def on_progress(text: str):
-            if session:
-                try:
-                    await self.context.send_message(session, plain_chain(text))
-                except Exception:
-                    pass
-
         try:
             events = await self.monitors.run_forum_check(
-                force_notify=True, on_progress=on_progress
+                force_notify=True,
+                on_progress=lambda text: self._send_forum_progress(session, text),
             )
         except Exception as exc:
             yield event.plain_result(f"RM 开源检查失败：{exc}")
             return
 
-        count = len(events)
-        if count:
-            lines = [f"RM 开源检查完成，发现 {count} 条新推送："]
-            for idx, article in enumerate(events, start=1):
-                lines.append(f"{idx}. {article.title}")
-                if article.url:
-                    lines.append(f"   {article.url}")
-            yield event.plain_result("\n".join(lines))
-        else:
-            yield event.plain_result(
-                "RM 开源检查完成，没有发现新的开源推送。\n"
-                "列表页访问正常，当前已入库的文章均无更新。"
-            )
+        yield event.plain_result(self.forum.format_check_response(events))
+
+    async def _send_forum_progress(self, session: str, text: str) -> None:
+        if not session:
+            return
+        try:
+            await self.context.send_message(session, plain_chain(text))
+        except Exception as exc:
+            logger.warning(f"RM 开源检查进度通知发送失败 {mask_identifier(session)}: {exc}")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM开源重建索引")

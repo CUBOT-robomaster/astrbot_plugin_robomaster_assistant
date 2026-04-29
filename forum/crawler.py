@@ -12,12 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-try:
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 from .models import ForumArticleInput
 
@@ -79,7 +74,7 @@ class ForumListParser(HTMLParser):
 
         if self.current is not None:
             self.depth += 1
-            if tag == "svg" and any("articleItem__titles" in item for item in self.class_stack):
+            if is_pinned_attrs(attrs_dict, classes):
                 self.current["pinned"] = True
         self.class_stack.append(classes)
 
@@ -101,12 +96,16 @@ class ForumListParser(HTMLParser):
         active = set().union(*self.class_stack) if self.class_stack else set()
         if "articleItem__title" in active:
             self.current["title"].append(text)
+            if is_pinned_text(text):
+                self.current["pinned"] = True
         elif "articleItem__info-author" in active or "articleItem__nickname" in active:
             self.current["author"].append(text)
         elif "articleItem__category" in active or "articleItem__tag--base" in active:
             self.current["category"].append(text)
         elif "articleItem__info-time" in active or "articleItem__datetime" in active:
             self.current["posted_at"].append(text)
+        elif is_pinned_text(text):
+            self.current["pinned"] = True
 
     def _finish_current(self) -> None:
         item = self.current or {}
@@ -134,6 +133,16 @@ def parse_article_list_html(html: str, base_url: str = DEFAULT_FORUM_URL, limit:
     parser.feed(html or "")
     parser.close()
     return parser.articles
+
+
+def is_pinned_attrs(attrs: dict[str, str], classes: set[str]) -> bool:
+    marker = " ".join([*classes, attrs.get("data-type", ""), attrs.get("data-status", "")]).lower()
+    return any(word in marker for word in ("sticky", "pinned", "is-top", "istop", "__top"))
+
+
+def is_pinned_text(text: str) -> bool:
+    normalized = normalize_text(text)
+    return normalized in {"置顶", "顶置"} or normalized.startswith("置顶")
 
 
 def extract_detail_text_and_links(
