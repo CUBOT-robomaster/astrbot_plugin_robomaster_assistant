@@ -65,22 +65,6 @@ class Main(ConfigSessionMixin, Star):
             yield result
 
     @filter.event_message_type(filter.EventMessageType.ALL)
-    async def rebuild_plain_text(self, event: AstrMessageEvent):
-        """兼容不带命令前缀的管理员重建消息。"""
-        if self._message_text(event) != "重建规则手册索引":
-            return
-        if not self._is_session_allowed(event):
-            return
-        if not self._is_admin(event):
-            self._stop_event(event)
-            yield event.plain_result(
-                "此命令仅管理员可用。请通过 /sid 获取 ID 后让管理员添加权限。"
-            )
-            return
-        async for result in self._rebuild_and_reply(event):
-            yield result
-
-    @filter.event_message_type(filter.EventMessageType.ALL)
     async def update_manual_plain_text(self, event: AstrMessageEvent):
         """管理员发送 HTTPS 链接下载并更新规则手册。"""
         message = self._message_text(event)
