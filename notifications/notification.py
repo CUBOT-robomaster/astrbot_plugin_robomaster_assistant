@@ -36,6 +36,8 @@ class CircuitBreaker:
             return False, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.recover_at))
         if self.recover_at:
             self.recover_at = 0.0
+            for _, counter, _ in self.windows:
+                counter.timestamps.clear()
         for name, counter, max_count in self.windows:
             count = counter.increment()
             if count > max_count:

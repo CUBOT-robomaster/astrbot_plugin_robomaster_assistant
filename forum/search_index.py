@@ -2,19 +2,14 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..core.text_utils import normalize_text, tokenize
 from .models import ForumArticle, ForumSearchHit
-
-try:
-    import jieba
-except Exception:  # pragma: no cover
-    jieba = None
 
 try:
     from rank_bm25 import BM25Okapi
@@ -259,18 +254,3 @@ def document_from_article(article: ForumArticle) -> ForumDocument:
     )
 
 
-def normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
-
-
-def tokenize(text: str) -> list[str]:
-    text = normalize_text(text).lower()
-    if not text:
-        return []
-    if jieba is not None:
-        tokens = [token.strip() for token in jieba.cut(text) if token.strip()]
-    else:
-        tokens = re.findall(r"[a-z0-9_]+", text)
-        chinese = "".join(re.findall(r"[\u4e00-\u9fff]", text))
-        tokens.extend(chinese[i : i + 2] for i in range(max(0, len(chinese) - 1)))
-    return [token for token in tokens if len(token) > 1 or re.match(r"[a-z0-9]", token)]

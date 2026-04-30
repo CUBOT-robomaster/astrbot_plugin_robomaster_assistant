@@ -9,10 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    import jieba
-except Exception:  # pragma: no cover - fallback for environments before deps install
-    jieba = None
+from ..core.text_utils import normalize_text, tokenize
 
 try:
     from rank_bm25 import BM25Okapi
@@ -53,32 +50,12 @@ class RebuildStats:
     errors: list[str]
 
 
-def normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
-
-
 def clean_excerpt(text: str) -> str:
     text = normalize_text(text)
     text = re.sub(r"\b\d{1,3}\s*©\s*20\d{2}\s*大疆\s*版权所有\s*", "", text)
     text = re.sub(r"©\s*20\d{2}\s*大疆\s*版权所有\s*", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip(" ，,。;；")
-
-
-def tokenize(text: str) -> list[str]:
-    text = normalize_text(text).lower()
-    if not text:
-        return []
-
-    tokens: list[str] = []
-    if jieba is not None:
-        tokens = [token.strip() for token in jieba.cut(text) if token.strip()]
-    else:
-        tokens = re.findall(r"[a-z0-9_]+", text)
-        chinese = "".join(re.findall(r"[\u4e00-\u9fff]", text))
-        tokens.extend(chinese[i : i + 2] for i in range(max(0, len(chinese) - 1)))
-
-    return [token for token in tokens if len(token) > 1 or re.match(r"[a-z0-9]", token)]
 
 
 class ManualSearchIndex:

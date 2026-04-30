@@ -26,7 +26,7 @@ from .notifications.service import NotificationService
     PLUGIN_VERSION,
 )
 class Main(ConfigSessionMixin, Star):
-    def __init__(self, context: Context, config: AstrBotConfig):
+    def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config
         self.monitor_state = MonitorState(plugin_state_path())
@@ -96,6 +96,7 @@ class Main(ConfigSessionMixin, Star):
         """监听“规则手册 xxx”并检索本地 PDF 规则手册。"""
         message = self._message_text(event)
         if message == "规则手册帮助":
+            self._stop_event(event)
             async for result in self._reply_manual_help(event):
                 yield result
             return
@@ -256,7 +257,7 @@ class Main(ConfigSessionMixin, Star):
         try:
             await self.context.send_message(session, plain_chain(text))
         except Exception as exc:
-            logger.warning(f"RM 开源检查进度通知发送失败 {mask_identifier(session)}: {exc}")
+            logger.warning("RM 开源检查进度通知发送失败 %s: %s", mask_identifier(session), exc)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM开源重建索引")
