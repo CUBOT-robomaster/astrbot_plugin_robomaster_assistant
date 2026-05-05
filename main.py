@@ -2,20 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .core.constants import NO_RESULT_TEXT, PLUGIN_NAME, PLUGIN_VERSION
+from .announcement.service import AnnouncementService
+from .core.background_tasks import BackgroundTaskManager
+from .core.constants import PLUGIN_NAME, PLUGIN_VERSION
 from .core.plugin_config import ConfigSessionMixin
-from .core.privacy import mask_identifier
+from .core.state import MonitorState
 from .core.storage import plugin_state_path
+from .forum.commands import ForumCommandHandler
+from .forum.monitor import ForumMonitor
 from .forum.service import ForumService
+from .manual.commands import ManualCommandHandler
 from .manual.reply import ManualReplyBuilder
 from .manual.service import ManualService
-from .monitors.monitor_state import MonitorState
-from .monitors.service import MonitorService
-from .notifications.notification import CircuitBreaker, plain_chain
+from .match.service import MatchPushService
+from .notifications.commands import NotificationCommandHandler
+from .notifications.notification import CircuitBreaker
 from .notifications.service import NotificationService
 
 
@@ -44,170 +49,100 @@ class Main(ConfigSessionMixin, Star):
             self._lark_clients,
             self.circuit_breaker,
         )
-        self.monitors = MonitorService(
+        self.announcement = AnnouncementService(
+            self,
+            self.monitor_state,
+            self.notifications,
+        )
+        self.match_push = MatchPushService(
+            self,
+            self.monitor_state,
+            self.notifications,
+        )
+        self.forum_monitor = ForumMonitor(
+            self.monitor_state,
+            self.notifications,
+            self.forum,
+        )
+        self.background_tasks = BackgroundTaskManager(
+            self,
+            self.monitor_state,
+            self._lark_clients,
+            self.announcement,
+            self.match_push,
+            self.forum_monitor,
+            self.forum,
+        )
+        self.manual_commands = ManualCommandHandler(self, self.manual, self.manual_reply)
+        self.forum_commands = ForumCommandHandler(self, self.forum, self.forum_monitor)
+        self.notification_commands = NotificationCommandHandler(
             self,
             self.monitor_state,
             self.notifications,
             self._lark_clients,
-            self.forum,
+            self.background_tasks,
         )
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """AstrBot 初始化完成后启动后台监控任务。"""
-        self.monitors.start_tasks()
+        self.background_tasks.start()
 
     @filter.command("规则手册帮助")
     async def manual_help_command(self, event: AstrMessageEvent):
         """查看 RoboMaster 规则手册检索插件帮助。"""
-        async for result in self._reply_manual_help(event):
+        async for result in self.manual_commands.reply_help(event):
             yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("重建规则手册索引")
     async def rebuild_command(self, event: AstrMessageEvent):
         """管理员重新扫描 PDF 目录并更新规则手册索引。"""
-        if not self._is_session_allowed(event):
-            return
-        async for result in self._rebuild_and_reply(event):
+        async for result in self.manual_commands.rebuild(event):
             yield result
 
     @filter.event_message_type(filter.EventMessageType.ALL)
-    async def update_manual_plain_text(self, event: AstrMessageEvent):
-        """管理员发送 HTTPS 链接下载并更新规则手册。"""
+    async def route_plain_text_commands(self, event: AstrMessageEvent):
+        """路由需要自行解析前缀的纯文本命令。"""
         message = self._message_text(event)
-        if message != "更新规则手册" and not message.startswith("更新规则手册 "):
-            return
-        if not self._is_session_allowed(event):
-            return
-        if not self._is_admin(event):
-            self._stop_event(event)
-            yield event.plain_result(
-                "此命令仅管理员可用。请通过 /sid 获取 ID 后让管理员添加权限。"
-            )
-            return
-
-        text = message.removeprefix("更新规则手册").strip()
-        async for result in self._update_manuals_and_reply(event, text):
-            yield result
-
-    @filter.event_message_type(filter.EventMessageType.ALL)
-    async def search_manual(self, event: AstrMessageEvent):
-        """监听“规则手册 xxx”并检索本地 PDF 规则手册。"""
-        message = self._message_text(event)
-        if message == "规则手册帮助":
-            self._stop_event(event)
-            async for result in self._reply_manual_help(event):
+        if message.startswith("更新规则手册 "):
+            async for result in self.manual_commands.update_plain_text(event):
                 yield result
             return
-
-        if not message.startswith("规则手册 "):
+        if message.startswith("规则手册 "):
+            async for result in self.manual_commands.search(event):
+                yield result
             return
-        if not self._is_session_allowed(event):
-            return
-
-        query = message.removeprefix("规则手册 ").strip()
-        self._stop_event(event)
-        if not query:
-            yield event.plain_result(self.manual.help_text())
-            return
-
-        response = await self.manual.search(query, event)
-        if not response.located_results:
-            yield event.plain_result(NO_RESULT_TEXT)
-            return
-
-        async for result in self.manual_reply.build(event, response):
-            yield result
+        if message.startswith("开源查询 "):
+            async for result in self.forum_commands.search(event):
+                yield result
 
     @filter.command("开源查询帮助")
     async def forum_help_command(self, event: AstrMessageEvent):
         """查看 RoboMaster 论坛开源查询帮助。"""
-        async for result in self._reply_forum_help(event):
+        async for result in self.forum_commands.reply_help(event):
             yield result
-
-    @filter.event_message_type(filter.EventMessageType.ALL)
-    async def search_forum(self, event: AstrMessageEvent):
-        """监听“开源查询 xxx”并检索论坛开源资料库。"""
-        message = self._message_text(event)
-        if message == "开源查询帮助":
-            async for result in self._reply_forum_help(event):
-                yield result
-            return
-
-        if not message.startswith("开源查询 "):
-            return
-        if not self._is_session_allowed(event):
-            return
-
-        query = message.removeprefix("开源查询 ").strip()
-        self._stop_event(event)
-        if not query:
-            yield event.plain_result(self.forum.help_text())
-            return
-
-        response = await self.forum.search(query, event)
-        yield event.plain_result(self.forum.format_search_response(response))
-
-    async def _rebuild_and_reply(self, event: AstrMessageEvent):
-        self._stop_event(event)
-        yield event.plain_result(await self.manual.rebuild())
-
-    async def _update_manuals_and_reply(self, event: AstrMessageEvent, text: str):
-        self._stop_event(event)
-        async for message in self.manual.update_from_text(text):
-            yield event.plain_result(message)
-
-    async def _reply_manual_help(self, event: AstrMessageEvent):
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        yield event.plain_result(self.manual.help_text())
-
-    async def _reply_forum_help(self, event: AstrMessageEvent):
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        yield event.plain_result(self.forum.help_text())
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM订阅通知")
     async def subscribe_rm_notifications(self, event: AstrMessageEvent):
         """订阅 RM 公告和赛事监控通知。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        session = getattr(event, "unified_msg_origin", "")
-        if not session:
-            yield event.plain_result("订阅失败：无法获取当前会话 ID。")
-            return
-        added = self.monitor_state.add_session(session)
-        lark_card_hint = self.notifications.remember_lark_runtime(event, session)
-        suffix = "\n已记录飞书卡片运行时信息。" if lark_card_hint else ""
-        yield event.plain_result(
-            ("已订阅 RM 通知。" if added else "当前会话已订阅 RM 通知。") + suffix
-        )
+        async for result in self.notification_commands.subscribe(event):
+            yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM取消订阅")
     async def unsubscribe_rm_notifications(self, event: AstrMessageEvent):
         """取消订阅 RM 公告和赛事监控通知。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        session = getattr(event, "unified_msg_origin", "")
-        removed = self.monitor_state.remove_session(session)
-        self._lark_clients.pop(session, None)
-        yield event.plain_result("已取消订阅 RM 通知。" if removed else "当前会话未订阅 RM 通知。")
+        async for result in self.notification_commands.unsubscribe(event):
+            yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM监控状态")
     async def rm_monitor_status(self, event: AstrMessageEvent):
         """查看 RM 公告和赛事监控状态。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        yield event.plain_result(self.monitors.status_text())
+        async for result in self.notification_commands.status(event):
+            yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM公告检查")
@@ -216,7 +151,7 @@ class Main(ConfigSessionMixin, Star):
         if not self._is_session_allowed(event):
             return
         self._stop_event(event)
-        events = await self.monitors.run_announce_check()
+        events = await self.announcement.run_check()
         yield event.plain_result(f"RM 公告检查完成，发现 {len(events)} 条通知。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -226,61 +161,33 @@ class Main(ConfigSessionMixin, Star):
         if not self._is_session_allowed(event):
             return
         self._stop_event(event)
-        events = await self.monitors.run_match_check()
+        events = await self.match_push.run_check()
         yield event.plain_result(f"RM 赛事检查完成，发现 {len(events)} 条通知。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM开源检查")
     async def rm_forum_check(self, event: AstrMessageEvent):
         """立即执行一次 RoboMaster 论坛开源检查。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        yield event.plain_result("正在检查 RM 论坛开源内容...")
-
-        session = getattr(event, "unified_msg_origin", "")
-
-        try:
-            events = await self.monitors.run_forum_check(
-                force_notify=True,
-                on_progress=lambda text: self._send_forum_progress(session, text),
-            )
-        except Exception as exc:
-            yield event.plain_result(f"RM 开源检查失败：{exc}")
-            return
-
-        yield event.plain_result(self.forum.format_check_response(events))
-
-    async def _send_forum_progress(self, session: str, text: str) -> None:
-        if not session:
-            return
-        try:
-            await self.context.send_message(session, plain_chain(text))
-        except Exception as exc:
-            logger.warning("RM 开源检查进度通知发送失败 %s: %s", mask_identifier(session), exc)
+        async for result in self.forum_commands.check(event):
+            yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM开源重建索引")
     async def rm_forum_rebuild_index(self, event: AstrMessageEvent):
         """从论坛文章库重建开源资料索引。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        yield event.plain_result(await self.forum.rebuild_index())
+        async for result in self.forum_commands.rebuild_index(event):
+            yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("RM开源导入")
     async def rm_forum_import(self, event: AstrMessageEvent):
         """导入 forum/imports 目录中的外部 JSONL 开源文章。"""
-        if not self._is_session_allowed(event):
-            return
-        self._stop_event(event)
-        seen, inserted = await self.forum.import_jsonl()
-        yield event.plain_result(f"RM 开源导入完成\n读取行：{seen}\n新增文章：{inserted}")
+        async for result in self.forum_commands.import_jsonl(event):
+            yield result
 
     async def terminate(self):
         """插件卸载时释放后台任务和内存索引。"""
-        await self.monitors.stop_tasks()
+        await self.background_tasks.stop()
         await self.forum.close()
         self.manual.clear()
         self.monitor_state.save()

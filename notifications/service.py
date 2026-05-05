@@ -8,7 +8,7 @@ from astrbot.api.event import AstrMessageEvent
 from ..core.network import is_public_url
 from ..core.event_platform import is_lark_event
 from ..core.privacy import mask_identifier, mask_url
-from ..monitors.monitor_state import MonitorState
+from ..core.state import MonitorState
 from .lark_enhance_card import send_lark_card
 from .notification import CircuitBreaker, plain_chain
 

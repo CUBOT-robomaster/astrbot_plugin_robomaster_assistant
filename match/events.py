@@ -96,9 +96,21 @@ def compare_match(
     scores_equal = score_key(previous) == score_key(current)
 
     if not names_equal and not current_empty:
-        return MatchEvent("match_start", current, previous or None, zone_key, format_match_event("match_start", current))
+        return MatchEvent(
+            "match_start",
+            current,
+            previous or None,
+            zone_key,
+            format_match_event("match_start", current),
+        )
     if not names_equal and not previous_empty:
-        return MatchEvent("match_end", previous, previous, zone_key, format_match_event("match_end", previous))
+        return MatchEvent(
+            "match_end",
+            previous,
+            previous,
+            zone_key,
+            format_match_event("match_end", previous),
+        )
     if not current_empty and names_equal and not scores_equal:
         return MatchEvent(
             "match_session_end",
