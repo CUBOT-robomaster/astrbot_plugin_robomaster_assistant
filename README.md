@@ -297,6 +297,11 @@ data/plugin_data/astrbot_plugin_robomaster_assistant/forum/imports/*.jsonl
 ## TODO
 
 - [ ] 实现让用户在使用 AstrBot 进行对话时自动调用 Tool
+- [ ] 参考飞书官方larkcli，增强插件的飞书交互功能
+
+## Contributing
+
+欢迎提交 Issue 或 Pull Request 来改进这个插件！无论是修复 bug、优化性能，还是添加新功能，我们都非常欢迎社区的贡献。
 
 ## License
 
