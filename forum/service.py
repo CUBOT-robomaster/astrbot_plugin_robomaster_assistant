@@ -112,42 +112,45 @@ class ForumService:
             import_dir = plugin_forum_import_dir()
             import_dir.mkdir(parents=True, exist_ok=True)
             seen = 0
-            inserted_count = 0
+            inserted_articles: list[ForumArticle] = []
             for path in sorted(import_dir.glob("*.jsonl")):
-                for line in path.read_text(encoding="utf-8").splitlines():
-                    if not line.strip():
-                        continue
-                    seen += 1
-                    try:
-                        data = json.loads(line)
-                        article_input = ForumArticleInput(
-                            title=str(data.get("title") or ""),
-                            url=str(data.get("url") or ""),
-                            author=str(data.get("author") or ""),
-                            category=str(data.get("category") or ""),
-                            posted_at=str(data.get("posted_at") or ""),
-                            raw_text=str(data.get("raw_text") or data.get("content") or ""),
-                            detail_error=str(data.get("detail_error") or ""),
-                            repo_links=[
-                                str(item)
-                                for item in data.get("repo_links", [])
-                                if str(item).strip()
-                            ]
-                            if isinstance(data.get("repo_links"), list)
-                            else [],
-                        )
-                    except Exception as exc:
-                        logger.warning(f"论坛 JSONL 导入行解析失败 {path.name}: {exc}")
-                        continue
-                    if not article_input.title or not article_input.url:
-                        continue
-                    stored, inserted = self.store.upsert_article(article_input)
-                    if inserted:
-                        inserted_count += 1
-                        await self._summarize_and_store(stored)
-            if inserted_count:
-                await self.rebuild_index()
-            return seen, inserted_count
+                with path.open("r", encoding="utf-8") as file:
+                    for line in file:
+                        if not line.strip():
+                            continue
+                        seen += 1
+                        try:
+                            data = json.loads(line)
+                            article_input = ForumArticleInput(
+                                title=str(data.get("title") or ""),
+                                url=str(data.get("url") or ""),
+                                author=str(data.get("author") or ""),
+                                category=str(data.get("category") or ""),
+                                posted_at=str(data.get("posted_at") or ""),
+                                raw_text=str(data.get("raw_text") or data.get("content") or ""),
+                                detail_error=str(data.get("detail_error") or ""),
+                                repo_links=[
+                                    str(item)
+                                    for item in data.get("repo_links", [])
+                                    if str(item).strip()
+                                ]
+                                if isinstance(data.get("repo_links"), list)
+                                else [],
+                            )
+                        except Exception as exc:
+                            logger.warning(f"论坛 JSONL 导入行解析失败 {path.name}: {exc}")
+                            continue
+                        if not article_input.title or not article_input.url:
+                            continue
+                        stored, inserted = self.store.upsert_article(article_input)
+                        if inserted:
+                            inserted_articles.append(stored)
+
+        for article in inserted_articles:
+            await self._summarize_and_store(article)
+        if inserted_articles:
+            await self.rebuild_index()
+        return seen, len(inserted_articles)
 
     async def rebuild_index(self) -> str:
         articles = self.store.all_articles()
@@ -285,11 +288,14 @@ class ForumService:
             "\"items\":[{\"id\":候选编号}]}\n\n"
             f"用户问题：{query}\n\n候选文章：\n{candidates}"
         )
+        text = ""
         try:
             response = await self.context.llm_generate(chat_provider_id=provider_id, prompt=prompt)
             text = (getattr(response, "completion_text", "") or "").strip()
             data = parse_llm_json(text)
             if not isinstance(data, dict):
+                excerpt = compact_log_excerpt(text) or "空响应"
+                logger.warning(f"论坛开源 LLM 查询选择返回非 JSON 对象：{excerpt}")
                 return [], ""
             selected: list[ForumSearchHit] = []
             seen: set[int] = set()
@@ -306,7 +312,9 @@ class ForumService:
                 selected.append(hits[item_id - 1])
             return selected, str(data.get("summary") or "").strip()
         except Exception as exc:
-            logger.warning(f"论坛开源 LLM 查询选择失败：{exc}")
+            excerpt = compact_log_excerpt(text)
+            suffix = f"，响应片段：{excerpt}" if excerpt else ""
+            logger.warning(f"论坛开源 LLM 查询选择失败：{exc}{suffix}")
             return [], ""
 
     async def _query_provider_id(self, event: AstrMessageEvent) -> str | None:
@@ -347,6 +355,13 @@ def parse_llm_json(text: str) -> dict[str, Any] | None:
     from .summarizer import parse_llm_json as parse
 
     return parse(text)
+
+
+def compact_log_excerpt(text: str, limit: int = 500) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "..."
 
 
 def now_ts() -> int:

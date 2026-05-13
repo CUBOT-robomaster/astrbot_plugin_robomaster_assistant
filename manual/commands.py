@@ -5,7 +5,7 @@ from typing import Any
 
 from astrbot.api.event import AstrMessageEvent
 
-from ..core.constants import NO_RESULT_TEXT
+from ..core.constants import LAZY_REBUILD_NOTICE, NO_RESULT_TEXT
 from .reply import ManualReplyBuilder
 from .service import ManualService
 
@@ -68,6 +68,9 @@ class ManualCommandHandler:
         if not query:
             yield event.plain_result(self.manual.help_text())
             return
+
+        if self.manual.needs_lazy_rebuild():
+            yield event.plain_result(LAZY_REBUILD_NOTICE)
 
         response = await self.manual.search(query, event)
         if not response.located_results:
