@@ -132,7 +132,7 @@ def format_match_event(event_type: str, match: dict[str, Any]) -> str:
     event_title = (((match.get("zone") or {}).get("event") or {}).get("title")) or "RoboMaster"
     red = _team_label(match.get("redSide"))
     blue = _team_label(match.get("blueSide"))
-    round_text = f"{match.get('round') or '-'} / {match.get('totalRound') or '-'}"
+    round_text = _round_text(match)
     score_text = f"{match.get('redSideWinGameCount') or 0} : {match.get('blueSideWinGameCount') or 0}"
     return (
         f"RoboMaster 赛事监控\n"
@@ -160,3 +160,19 @@ def _college_name(side: dict[str, Any] | None) -> str:
 
 def _team_name(side: dict[str, Any] | None) -> str:
     return (((side or {}).get("player") or {}).get("team") or {}).get("name") or ""
+
+
+def _round_text(match: dict[str, Any]) -> str:
+    total_round = match.get("totalRound")
+    if not isinstance(total_round, int) or total_round <= 0:
+        return f"{match.get('round') or '-'} / {total_round or '-'}"
+
+    round_states = ["-", *range(1, total_round + 1)]
+    current_round = match.get("round")
+    if current_round in (None, "", "-"):
+        return f"{round_states[-1]} / {total_round}"
+    if not isinstance(current_round, int):
+        return f"- / {total_round}"
+
+    index = max(0, min(current_round - 1, len(round_states) - 1))
+    return f"{round_states[index]} / {total_round}"
