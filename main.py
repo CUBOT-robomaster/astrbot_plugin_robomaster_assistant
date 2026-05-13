@@ -22,6 +22,7 @@ from .match.service import MatchPushService
 from .notifications.commands import NotificationCommandHandler
 from .notifications.notification import CircuitBreaker
 from .notifications.service import NotificationService
+from .tools import build_llm_tools
 
 
 @register(
@@ -82,6 +83,7 @@ class Main(ConfigSessionMixin, Star):
             self._lark_clients,
             self.background_tasks,
         )
+        self.context.add_llm_tools(*build_llm_tools(self))
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):

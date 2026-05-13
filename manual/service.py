@@ -41,9 +41,7 @@ class ManualService:
         self.llm = ManualLlmService(context, config, lambda: self.index)
 
     async def search(self, query: str, event: AstrMessageEvent) -> ManualSearchResponse:
-        if not self.index.pages:
-            self.index = ManualSearchIndex.load(self.index_path)
-        if not self.index.pages:
+        if self.needs_lazy_rebuild():
             await self.try_lazy_rebuild()
 
         max_results = self.config._config_int("max_results", 3)
@@ -261,12 +259,19 @@ class ManualService:
 
     async def try_lazy_rebuild(self) -> None:
         async with self.lock:
+            if not self.needs_lazy_rebuild():
+                return
             manual_dir = self.manual_dir()
             index, stats = await asyncio.to_thread(rebuild_index, manual_dir)
             self.index = index
             await asyncio.to_thread(index.save, self.index_path, manual_dir, stats)
         if stats.errors:
             logger.info(f"规则手册索引自动构建完成，提示数：{len(stats.errors)}")
+
+    def needs_lazy_rebuild(self) -> bool:
+        if not self.index.pages:
+            self.index = ManualSearchIndex.load(self.index_path)
+        return not self.index.pages
 
     def help_text(self) -> str:
         return (

@@ -5,6 +5,7 @@ from pathlib import Path
 PLUGIN_NAME = "astrbot_plugin_robomaster_assistant"
 DISPLAY_NAME = "RoboMaster赛事助手"
 NO_RESULT_TEXT = "未在规则手册中找到可靠依据，请换个关键词试试。"
+LAZY_REBUILD_NOTICE = "规则手册索引为空，正在自动构建索引，首次查询可能需要一段时间..."
 DEFAULT_MANUAL_DIR = f"data/plugin_data/{PLUGIN_NAME}/manuals"
 
 

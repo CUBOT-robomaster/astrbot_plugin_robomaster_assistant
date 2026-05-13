@@ -336,7 +336,7 @@
             "description": "开源检查间隔秒数",
             "type": "int",
             "hint": "建议不低于 300 秒，过于频繁可能触发论坛风控。",
-            "default": 300
+            "default": 3600
           },
           "forum_article_url": {
             "description": "论坛文章列表地址",
