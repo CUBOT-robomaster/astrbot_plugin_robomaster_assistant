@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlparse
 
 from astrbot.api import logger
 
+from ..core.text_utils import normalize_text
 from .models import ForumArticleInput
 
 
@@ -173,7 +174,10 @@ def extract_detail_text_and_links(
     source_html = html or ""
     try:
         from bs4 import BeautifulSoup
+    except ImportError:
+        return extract_detail_text_and_links_simple(source_html, css_selector)
 
+    try:
         soup = BeautifulSoup(source_html, "html.parser")
         selected = soup.select(css_selector) if css_selector.strip() else []
         container = selected[0] if selected else soup
@@ -183,18 +187,25 @@ def extract_detail_text_and_links(
         links = extract_links(selected_html)
         text = normalize_text(container.get_text(" ", strip=True))
         return text, links
-    except Exception:
-        selected_html = select_first_simple_html(source_html, css_selector)
-        cleaned = re.sub(
-            r"<(script|style|svg|header|footer|nav|noscript)\b[^>]*>.*?</\1>",
-            " ",
-            selected_html,
-            flags=re.I | re.S,
-        )
-        links = extract_links(cleaned)
-        text = re.sub(r"<[^>]+>", " ", cleaned)
-        text = normalize_text(unescape(text))
-        return text, links
+    except Exception as exc:
+        logger.warning(f"论坛详情 BeautifulSoup 解析失败，降级正则解析：{exc}")
+        return extract_detail_text_and_links_simple(source_html, css_selector)
+
+
+def extract_detail_text_and_links_simple(
+    html: str,
+    css_selector: str = DEFAULT_DETAIL_CSS_SELECTOR,
+) -> tuple[str, list[str]]:
+    selected_html = select_first_simple_html(html or "", css_selector)
+    cleaned = re.sub(
+        r"<(script|style|svg|header|footer|nav|noscript)\b[^>]*>.*?</\1>",
+        " ",
+        selected_html,
+        flags=re.I | re.S,
+    )
+    links = extract_links(cleaned)
+    text = re.sub(r"<[^>]+>", " ", cleaned)
+    return normalize_text(unescape(text)), links
 
 
 def select_first_simple_html(html: str, css_selector: str) -> str:
@@ -256,10 +267,6 @@ def extract_links(text: str) -> list[str]:
     return cleaned
 
 
-def normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
-
-
 class ForumCrawler:
     def __init__(self):
         self._playwright: Any | None = None
@@ -282,7 +289,7 @@ class ForumCrawler:
     async def _fetch_articles_http(self, settings: ForumCrawlerSettings) -> list[ForumArticleInput]:
         try:
             import httpx
-        except Exception as exc:  # pragma: no cover
+        except ImportError as exc:  # pragma: no cover
             raise RuntimeError("论坛 HTTP 模式需要安装 httpx。") from exc
 
         timeout = max(5, settings.http_timeout_seconds)
@@ -379,7 +386,10 @@ class ForumCrawler:
             kwargs["storage_state"] = str(storage_state)
         try:
             context = await browser.new_context(**kwargs)
-        except Exception:
+        except Exception as exc:
+            if "storage_state" not in kwargs:
+                raise
+            logger.warning(f"论坛 browser cookies 状态加载失败，改用空上下文：{exc}")
             kwargs.pop("storage_state", None)
             context = await browser.new_context(**kwargs)
         await context.add_init_script(
@@ -393,7 +403,6 @@ class ForumCrawler:
         key = (
             settings.headless,
             self._chromium_executable_path(settings),
-            settings.user_agent,
         )
         if self._browser is not None and self._browser_key == key:
             try:
@@ -404,7 +413,7 @@ class ForumCrawler:
         await self._close_unlocked()
         try:
             from playwright.async_api import async_playwright
-        except Exception as exc:  # pragma: no cover - depends on deployment env
+        except ImportError as exc:  # pragma: no cover - depends on deployment env
             raise RuntimeError(
                 "论坛 browser 模式需要安装 Playwright："
                 "pip install playwright && python -m playwright install chromium；"
@@ -548,7 +557,7 @@ class ForumCrawler:
 def load_http_cookies(path: Path | None) -> Any:
     try:
         import httpx
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         return None
 
     cookies = httpx.Cookies()

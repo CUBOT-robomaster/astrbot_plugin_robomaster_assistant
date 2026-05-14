@@ -18,6 +18,7 @@ from .forum.service import ForumService
 from .manual.commands import ManualCommandHandler
 from .manual.reply import ManualReplyBuilder
 from .manual.service import ManualService
+from .match.commands import MatchCommandHandler
 from .match.service import MatchPushService
 from .notifications.commands import NotificationCommandHandler
 from .notifications.notification import CircuitBreaker
@@ -59,6 +60,7 @@ class Main(ConfigSessionMixin, Star):
             self,
             self.monitor_state,
             self.notifications,
+            context=context,
         )
         self.forum_monitor = ForumMonitor(
             self.monitor_state,
@@ -76,11 +78,11 @@ class Main(ConfigSessionMixin, Star):
         )
         self.manual_commands = ManualCommandHandler(self, self.manual, self.manual_reply)
         self.forum_commands = ForumCommandHandler(self, self.forum, self.forum_monitor)
+        self.match_commands = MatchCommandHandler(self, self.match_push)
         self.notification_commands = NotificationCommandHandler(
             self,
             self.monitor_state,
             self.notifications,
-            self._lark_clients,
             self.background_tasks,
         )
         self.context.add_llm_tools(*build_llm_tools(self))
@@ -118,6 +120,17 @@ class Main(ConfigSessionMixin, Star):
         if message.startswith("开源查询 "):
             async for result in self.forum_commands.search(event):
                 yield result
+            return
+        if message == "赛事查询" or message.startswith("赛事查询 "):
+            async for result in self.match_commands.query(event):
+                yield result
+            return
+
+    @filter.command("赛事查询帮助")
+    async def match_help_command(self, event: AstrMessageEvent):
+        """查看 RoboMaster 赛事查询帮助。"""
+        async for result in self.match_commands.reply_help(event):
+            yield result
 
     @filter.command("开源查询帮助")
     async def forum_help_command(self, event: AstrMessageEvent):
@@ -126,17 +139,45 @@ class Main(ConfigSessionMixin, Star):
             yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("RM订阅通知")
-    async def subscribe_rm_notifications(self, event: AstrMessageEvent):
-        """订阅 RM 公告和赛事监控通知。"""
-        async for result in self.notification_commands.subscribe(event):
+    @filter.command("RM订阅公告")
+    async def subscribe_rm_announcements(self, event: AstrMessageEvent):
+        """订阅 RM 公告通知。"""
+        async for result in self.notification_commands.subscribe(event, "announcement"):
             yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("RM取消订阅")
-    async def unsubscribe_rm_notifications(self, event: AstrMessageEvent):
-        """取消订阅 RM 公告和赛事监控通知。"""
-        async for result in self.notification_commands.unsubscribe(event):
+    @filter.command("RM取消公告订阅")
+    async def unsubscribe_rm_announcements(self, event: AstrMessageEvent):
+        """取消订阅 RM 公告通知。"""
+        async for result in self.notification_commands.unsubscribe(event, "announcement"):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("RM订阅赛事")
+    async def subscribe_rm_matches(self, event: AstrMessageEvent):
+        """订阅 RM 赛事通知。"""
+        async for result in self.notification_commands.subscribe(event, "match"):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("RM取消赛事订阅")
+    async def unsubscribe_rm_matches(self, event: AstrMessageEvent):
+        """取消订阅 RM 赛事通知。"""
+        async for result in self.notification_commands.unsubscribe(event, "match"):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("RM订阅开源")
+    async def subscribe_rm_forum(self, event: AstrMessageEvent):
+        """订阅 RM 论坛开源通知。"""
+        async for result in self.notification_commands.subscribe(event, "forum"):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("RM取消开源订阅")
+    async def unsubscribe_rm_forum(self, event: AstrMessageEvent):
+        """取消订阅 RM 论坛开源通知。"""
+        async for result in self.notification_commands.unsubscribe(event, "forum"):
             yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -190,6 +231,7 @@ class Main(ConfigSessionMixin, Star):
     async def terminate(self):
         """插件卸载时释放后台任务和内存索引。"""
         await self.background_tasks.stop()
+        await self.match_push.close()
         await self.forum.close()
         self.manual.clear()
         self.monitor_state.save()

@@ -29,13 +29,9 @@ class BackgroundTaskManager:
         self.tasks: list[asyncio.Task[Any]] = []
 
     def start(self) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("无法获取事件循环，监控任务未启动。")
-            return
+        loop = asyncio.get_running_loop()
 
-        self.tasks = [task for task in self.tasks if not task.done()]
+        self.tasks = [task for task in self.tasks if self._keep_task(task)]
         active_names = {task.get_name() for task in self.tasks}
         if (
             self.config._config_bool("announce_enabled", False)
@@ -69,9 +65,12 @@ class BackgroundTaskManager:
             f"公告监控：{'开启' if self.config._config_bool('announce_enabled', False) else '关闭'}",
             f"赛事监控：{'开启' if self.config._config_bool('match_monitor_enabled', False) else '关闭'}",
             f"开源监控：{'开启' if self.config._config_bool('forum_monitor_enabled', False) else '关闭'}",
-            f"订阅会话：{len(self.monitor_state.sessions)}",
-            f"飞书卡片通知：{'开启' if self.config._config_bool('enable_lark_card_notifications', False) else '关闭'}",
-            f"飞书卡片可用会话：{len(self.lark_clients)}",
+            f"公告订阅会话：{len(self.monitor_state.sessions('announcement'))}",
+            f"赛事订阅会话：{len(self.monitor_state.sessions('match'))}",
+            f"开源订阅会话：{len(self.monitor_state.sessions('forum'))}",
+            f"公告飞书卡片：{'开启' if self.config._config_bool('announce_enable_lark_card_notifications', False) else '关闭'} / 可用 {self._lark_count('announcement')}",
+            f"赛事飞书卡片：{'开启' if self.config._config_bool('match_enable_lark_card_notifications', False) else '关闭'} / 可用 {self._lark_count('match')}",
+            f"开源飞书卡片：{'开启' if self.config._config_bool('forum_enable_lark_card_notifications', False) else '关闭'} / 可用 {self._lark_count('forum')}",
             f"公告 last_id：{data.get('announce_last_id') or self.config._config_int('announce_last_id', 0)}",
             f"监控公告页：{len(data.get('announce_page_hashes', {}))}",
             f"赛事缓存赛区：{len(data.get('match_previous', {}))}",
@@ -82,13 +81,26 @@ class BackgroundTaskManager:
             f"后台任务：{sum(1 for task in self.tasks if not task.done())}",
         ]
 
+    def _lark_count(self, channel: str) -> int:
+        prefix = f"{channel}:"
+        return sum(1 for key in self.lark_clients if key.startswith(prefix))
+
+    def _keep_task(self, task: asyncio.Task[Any]) -> bool:
+        if not task.done():
+            return True
+        if task.cancelled():
+            return False
+        try:
+            task.result()
+        except Exception as exc:
+            logger.warning(f"RM 后台任务异常结束：{task.get_name()} {exc}")
+        return False
+
     async def _announcement_loop(self) -> None:
         interval = max(5, self.config._config_int("announce_interval_seconds", 60))
         while True:
             try:
                 await self.announcement.run_check()
-            except asyncio.CancelledError:
-                raise
             except Exception as exc:
                 logger.warning(f"RM 公告监控失败：{exc}")
             await asyncio.sleep(interval)
@@ -98,8 +110,6 @@ class BackgroundTaskManager:
         while True:
             try:
                 await self.match_push.run_check()
-            except asyncio.CancelledError:
-                raise
             except Exception as exc:
                 logger.warning(f"RM 赛事监控失败：{exc}")
             await asyncio.sleep(interval)
@@ -108,8 +118,6 @@ class BackgroundTaskManager:
         while True:
             try:
                 await self.forum_monitor.run_check()
-            except asyncio.CancelledError:
-                raise
             except Exception as exc:
                 logger.warning(f"RM 开源论坛监控失败：{exc}")
                 self.monitor_state.data["forum_last_error"] = str(exc)

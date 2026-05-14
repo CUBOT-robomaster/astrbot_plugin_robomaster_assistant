@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import random
-import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -27,7 +27,7 @@ from .crawler import (
 from .models import ForumArticle, ForumArticleInput, ForumSearchHit, ForumSearchResponse
 from .search_index import ForumSearchIndex
 from .store import ForumArticleStore
-from .summarizer import ForumSummarizer, render_article_index_text
+from .summarizer import ForumSummarizer, parse_llm_json, render_article_index_text
 
 
 NO_FORUM_RESULT_TEXT = "未在论坛开源资料库中找到相关内容，请换个关键词试试。"
@@ -43,6 +43,7 @@ class ForumService:
         self.crawler = ForumCrawler()
         self.summarizer = ForumSummarizer(context, config)
         self.lock = asyncio.Lock()
+        self.crawler_lock = asyncio.Lock()
         self.last_check_stats: dict[str, int] = {
             "listed": 0,
             "inserted": 0,
@@ -50,101 +51,110 @@ class ForumService:
         }
 
     async def close(self) -> None:
-        await self.crawler.close()
+        async with self.crawler_lock:
+            await self.crawler.close()
 
     async def check(
         self, *, notify: bool, on_progress: Callable[[str], Awaitable[None]] | None = None
     ) -> list[ForumArticle]:
-        async with self.lock:
-            if on_progress:
-                await on_progress("正在访问 RM 论坛列表页...")
+        if on_progress:
+            await on_progress("正在访问 RM 论坛列表页...")
 
-            settings = self._crawler_settings()
-            try:
+        settings = self._crawler_settings()
+        try:
+            async with self.crawler_lock:
                 articles = await self.crawler.fetch_articles(settings)
-            except Exception as exc:
-                self.last_check_stats = {
-                    "listed": 0,
-                    "inserted": 0,
-                    "stored": self.store.article_count(),
-                }
-                if on_progress:
-                    await on_progress(f"列表页访问失败：{exc}")
-                raise
-
+        except Exception as exc:
+            self.last_check_stats = {
+                "listed": 0,
+                "inserted": 0,
+                "stored": self.store.article_count(),
+            }
             if on_progress:
-                await on_progress(
-                    f"列表页获取成功，发现 {len(articles)} 篇文章，正在逐一检查详情..."
-                )
+                await on_progress(f"列表页访问失败：{exc}")
+            raise
 
-            new_articles: list[ForumArticle] = []
+        if on_progress:
+            await on_progress(
+                f"列表页获取成功，发现 {len(articles)} 篇文章，正在逐一检查详情..."
+            )
+
+        inserted_articles: list[ForumArticle] = []
+        async with self.lock:
             for item in articles:
                 stored, inserted = self.store.upsert_article(item)
                 if not inserted:
                     continue
-                if on_progress:
-                    await on_progress(f"发现新文章，正在生成摘要：{item.title}")
-                summarized = await self._summarize_and_store(stored)
-                new_articles.append(summarized)
+                inserted_articles.append(stored)
 
-            if new_articles:
-                if on_progress:
-                    await on_progress("正在重建搜索索引...")
-                await self.rebuild_index()
-
-            self.last_check_stats = {
-                "listed": len(articles),
-                "inserted": len(new_articles),
-                "stored": self.store.article_count(),
-            }
+        new_articles: list[ForumArticle] = []
+        for stored in inserted_articles:
             if on_progress:
-                await on_progress(
-                    "扫描完成："
-                    f"列表 {self.last_check_stats['listed']} 篇，"
-                    f"新收录 {self.last_check_stats['inserted']} 篇，"
-                    f"当前入库 {self.last_check_stats['stored']} 篇。"
-                )
+                await on_progress(f"发现新文章，正在生成摘要：{stored.title}")
+            summarized = await self._summarize_and_store(stored)
+            new_articles.append(summarized)
 
-            return new_articles if notify else []
+        if new_articles:
+            if on_progress:
+                await on_progress("正在重建搜索索引...")
+            await self.rebuild_index()
+
+        self.last_check_stats = {
+            "listed": len(articles),
+            "inserted": len(new_articles),
+            "stored": self.store.article_count(),
+        }
+        if on_progress:
+            await on_progress(
+                "扫描完成："
+                f"列表 {self.last_check_stats['listed']} 篇，"
+                f"新收录 {self.last_check_stats['inserted']} 篇，"
+                f"当前入库 {self.last_check_stats['stored']} 篇。"
+            )
+
+        return new_articles if notify else []
 
     async def import_jsonl(self) -> tuple[int, int]:
+        import_dir = plugin_forum_import_dir()
+        import_dir.mkdir(parents=True, exist_ok=True)
+        seen = 0
+        article_inputs: list[ForumArticleInput] = []
+        for path in sorted(import_dir.glob("*.jsonl")):
+            with path.open("r", encoding="utf-8") as file:
+                for line in file:
+                    if not line.strip():
+                        continue
+                    seen += 1
+                    try:
+                        data = json.loads(line)
+                        article_input = ForumArticleInput(
+                            title=str(data.get("title") or ""),
+                            url=str(data.get("url") or ""),
+                            author=str(data.get("author") or ""),
+                            category=str(data.get("category") or ""),
+                            posted_at=str(data.get("posted_at") or ""),
+                            raw_text=str(data.get("raw_text") or data.get("content") or ""),
+                            detail_error=str(data.get("detail_error") or ""),
+                            repo_links=[
+                                str(item)
+                                for item in data.get("repo_links", [])
+                                if str(item).strip()
+                            ]
+                            if isinstance(data.get("repo_links"), list)
+                            else [],
+                        )
+                    except Exception as exc:
+                        logger.warning(f"论坛 JSONL 导入行解析失败 {path.name}: {exc}")
+                        continue
+                    if article_input.title and article_input.url:
+                        article_inputs.append(article_input)
+
+        inserted_articles: list[ForumArticle] = []
         async with self.lock:
-            import_dir = plugin_forum_import_dir()
-            import_dir.mkdir(parents=True, exist_ok=True)
-            seen = 0
-            inserted_articles: list[ForumArticle] = []
-            for path in sorted(import_dir.glob("*.jsonl")):
-                with path.open("r", encoding="utf-8") as file:
-                    for line in file:
-                        if not line.strip():
-                            continue
-                        seen += 1
-                        try:
-                            data = json.loads(line)
-                            article_input = ForumArticleInput(
-                                title=str(data.get("title") or ""),
-                                url=str(data.get("url") or ""),
-                                author=str(data.get("author") or ""),
-                                category=str(data.get("category") or ""),
-                                posted_at=str(data.get("posted_at") or ""),
-                                raw_text=str(data.get("raw_text") or data.get("content") or ""),
-                                detail_error=str(data.get("detail_error") or ""),
-                                repo_links=[
-                                    str(item)
-                                    for item in data.get("repo_links", [])
-                                    if str(item).strip()
-                                ]
-                                if isinstance(data.get("repo_links"), list)
-                                else [],
-                            )
-                        except Exception as exc:
-                            logger.warning(f"论坛 JSONL 导入行解析失败 {path.name}: {exc}")
-                            continue
-                        if not article_input.title or not article_input.url:
-                            continue
-                        stored, inserted = self.store.upsert_article(article_input)
-                        if inserted:
-                            inserted_articles.append(stored)
+            for article_input in article_inputs:
+                stored, inserted = self.store.upsert_article(article_input)
+                if inserted:
+                    inserted_articles.append(stored)
 
         for article in inserted_articles:
             await self._summarize_and_store(article)
@@ -153,7 +163,7 @@ class ForumService:
         return seen, len(inserted_articles)
 
     async def rebuild_index(self) -> str:
-        articles = self.store.all_articles()
+        articles = await asyncio.to_thread(self.store.all_articles)
         self.index = ForumSearchIndex.from_articles(articles)
         await asyncio.to_thread(self.index.save, self.index_path)
         return f"开源资料索引已重建\n文章：{len(articles)}\n可检索文档：{len(self.index.documents)}"
@@ -255,15 +265,16 @@ class ForumService:
 
     async def _summarize_and_store(self, article: ForumArticle) -> ForumArticle:
         summary = await self.summarizer.summarize(article)
-        self.store.update_summary(
-            article.id,
-            summary=summary.summary,
-            tech_stack=summary.tech_stack,
-            scenarios=summary.scenarios,
-            repo_links=summary.repo_links,
-            key_points=summary.key_points,
-        )
-        updated = self.store.get_article(article.id)
+        async with self.lock:
+            self.store.update_summary(
+                article.id,
+                summary=summary.summary,
+                tech_stack=summary.tech_stack,
+                scenarios=summary.scenarios,
+                repo_links=summary.repo_links,
+                key_points=summary.key_points,
+            )
+            updated = self.store.get_article(article.id)
         return updated or article
 
     async def _select_with_llm(
@@ -324,9 +335,9 @@ class ForumService:
         getter = getattr(self.context, "get_current_chat_provider_id", None)
         if getter is None:
             return None
-        try:
+        if accepts_umo_keyword(getter):
             result = getter(umo=event.unified_msg_origin)
-        except TypeError:
+        else:
             result = getter(event.unified_msg_origin)
         if hasattr(result, "__await__"):
             return await result
@@ -351,10 +362,20 @@ class ForumService:
         )
 
 
-def parse_llm_json(text: str) -> dict[str, Any] | None:
-    from .summarizer import parse_llm_json as parse
-
-    return parse(text)
+def accepts_umo_keyword(func: Any) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return True
+    parameters = signature.parameters.values()
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.name == "umo"
+            and parameter.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+        )
+        for parameter in parameters
+    )
 
 
 def compact_log_excerpt(text: str, limit: int = 500) -> str:
@@ -363,6 +384,3 @@ def compact_log_excerpt(text: str, limit: int = 500) -> str:
         return compact
     return compact[:limit] + "..."
 
-
-def now_ts() -> int:
-    return int(time.time())

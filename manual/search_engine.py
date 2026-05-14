@@ -13,12 +13,12 @@ from ..core.text_utils import normalize_text, tokenize
 
 try:
     from rank_bm25 import BM25Okapi
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     BM25Okapi = None
 
 try:
     from rapidfuzz import fuzz
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     fuzz = None
 
 
@@ -360,11 +360,12 @@ def extract_pdf_text_pages(pdf_path: Path) -> list[tuple[int, str]]:
 def _extract_with_pypdf(pdf_path: Path) -> list[tuple[int, str]]:
     from pypdf import PdfReader
 
-    reader = PdfReader(str(pdf_path))
-    extracted_pages: list[tuple[int, str]] = []
-    for page_index, page in enumerate(reader.pages, start=1):
-        text = normalize_text(page.extract_text() or "")
-        extracted_pages.append((page_index, text))
+    with pdf_path.open("rb") as file:
+        reader = PdfReader(file)
+        extracted_pages: list[tuple[int, str]] = []
+        for page_index, page in enumerate(reader.pages, start=1):
+            text = normalize_text(page.extract_text() or "")
+            extracted_pages.append((page_index, text))
     return extracted_pages
 
 

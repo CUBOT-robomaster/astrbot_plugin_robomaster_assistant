@@ -122,16 +122,32 @@ def parse_llm_json(text: str) -> dict[str, Any] | None:
         try:
             data = json.loads(candidate)
         except json.JSONDecodeError:
-            for index, char in enumerate(candidate):
-                if char != "{":
-                    continue
-                try:
-                    data, _ = decoder.raw_decode(candidate[index:])
-                except json.JSONDecodeError:
-                    continue
-                return data if isinstance(data, dict) else None
+            found = parse_embedded_json_object(candidate, decoder)
+            if found is not None:
+                return found
         else:
-            return data if isinstance(data, dict) else None
+            if isinstance(data, dict):
+                return data
+            if isinstance(data, list):
+                first = next((item for item in data if isinstance(item, dict)), None)
+                if first is not None:
+                    return first
+            found = parse_embedded_json_object(candidate, decoder)
+            if found is not None:
+                return found
+    return None
+
+
+def parse_embedded_json_object(text: str, decoder: json.JSONDecoder) -> dict[str, Any] | None:
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            data, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
     return None
 
 

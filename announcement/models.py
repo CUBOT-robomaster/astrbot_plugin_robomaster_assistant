@@ -7,7 +7,7 @@ from html import unescape
 
 try:
     from bs4 import BeautifulSoup
-except Exception:  # pragma: no cover - dependency may be installed by AstrBot
+except ImportError:  # pragma: no cover - dependency may be installed by AstrBot
     BeautifulSoup = None
 
 

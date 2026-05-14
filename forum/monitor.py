@@ -4,6 +4,8 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 
+from astrbot.api import logger
+
 from ..core.state import MonitorState
 from ..notifications.service import NotificationService
 from .models import ForumArticle
@@ -43,19 +45,25 @@ class ForumMonitor:
         events = await self.forum.check(notify=notify, on_progress=on_progress)
         self.monitor_state.data["forum_initialized"] = True
         self.monitor_state.data["forum_last_check_at"] = int(time.time())
-        self.monitor_state.data["forum_last_error"] = ""
-        self.monitor_state.save()
+        last_error = ""
         for article in events:
-            await self.notifications.notify(
-                self.forum.notification_text(article),
-                {
-                    "id": article.id,
-                    "title": article.title,
-                    "url": article.url,
-                    "author": article.author,
-                    "category": article.category,
-                },
-                "forum_article_new",
-            )
-            self.forum.store.mark_notified(article.id)
+            try:
+                await self.notifications.notify(
+                    self.forum.notification_text(article),
+                    {
+                        "id": article.id,
+                        "title": article.title,
+                        "url": article.url,
+                        "author": article.author,
+                        "category": article.category,
+                    },
+                    "forum_article_new",
+                    "forum",
+                )
+                self.forum.store.mark_notified(article.id)
+            except Exception as exc:
+                logger.warning(f"RM 开源论坛通知失败：{article.id} {exc}")
+                last_error = str(exc)
+        self.monitor_state.data["forum_last_error"] = last_error
+        self.monitor_state.save()
         return events

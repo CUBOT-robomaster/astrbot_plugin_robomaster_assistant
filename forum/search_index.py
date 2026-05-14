@@ -13,12 +13,12 @@ from .models import ForumArticle, ForumSearchHit
 
 try:
     from rank_bm25 import BM25Okapi
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     BM25Okapi = None
 
 try:
     from rapidfuzz import fuzz
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     fuzz = None
 
 
@@ -113,7 +113,7 @@ class ForumSearchIndex:
                 for item in data.get("documents", [])
                 if isinstance(item, dict) and item.get("title") and item.get("url")
             ]
-        except Exception:
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return cls([])
         return cls(docs)
 

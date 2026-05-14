@@ -16,6 +16,7 @@ from ..core.storage import (
     plugin_download_dir,
     plugin_index_path,
     plugin_manual_dir,
+    plugin_manual_image_dir,
 )
 from .downloader import (
     ManualDownloadError,
@@ -29,6 +30,8 @@ from .downloader import (
 from .llm_retriever import ManualLlmService
 from .models import LocatedResult, ManualSearchResponse
 from .search_engine import ManualSearchIndex, rebuild_index
+
+LEGACY_DEFAULT_MANUAL_DIR = "data/plugin_data/astrbot_plugin_robomaster_assistant/manuals"
 
 
 class ManualService:
@@ -157,12 +160,11 @@ class ManualService:
                     plugin_download_dir(),
                     max_bytes=self.config._config_int("download_max_mb", 500) * 1024 * 1024,
                     timeout_seconds=max(10, self.config._config_int("download_timeout_seconds", 600)),
-                    free_space_buffer_bytes=max(
-                        0,
-                        self.config._config_int("download_free_space_buffer_mb", 200),
-                    )
-                    * 1024
-                    * 1024,
+                    free_space_buffer_bytes=(
+                        max(0, self.config._config_int("download_free_space_buffer_mb", 200))
+                        * 1024
+                        * 1024
+                    ),
                 )
             )
 
@@ -294,11 +296,11 @@ class ManualService:
         )
 
     def image_cache_dir(self) -> Path:
-        return self.index_path.parent / "images"
+        return plugin_manual_image_dir()
 
     def manual_dir(self) -> str:
         configured = self.config._config_str("manual_dir", DEFAULT_MANUAL_DIR).strip()
-        if configured and configured != DEFAULT_MANUAL_DIR:
+        if configured and configured not in {DEFAULT_MANUAL_DIR, LEGACY_DEFAULT_MANUAL_DIR}:
             return configured
         return str(plugin_manual_dir())
 
@@ -308,7 +310,7 @@ class ManualService:
 
 def extract_urls(text: str) -> list[str]:
     urls: list[str] = []
-    for match in re.finditer(r"https?://[^\s<>'\"，。；！？，]+", text):
+    for match in re.finditer(r"https?://[^\s<>'\"，。；！？]+", text):
         url = match.group(0).rstrip("，,。；;！!？?)]）>")
         if url:
             urls.append(url)

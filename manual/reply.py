@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
@@ -84,7 +85,7 @@ class ManualReplyBuilder:
         event: AstrMessageEvent,
         reply_mode: str,
     ) -> bool:
-        if reply_mode == "text" or not is_lark_event(event):
+        if not is_lark_event(event):
             return False
         return self.config._config_bool("lark_split_text_and_images", True)
 
@@ -202,16 +203,8 @@ def build_forward_chain(caption: str, rendered: list[tuple[LocatedResult, Path]]
 
 def short_file_name(file_name: str) -> str:
     name = Path(file_name).stem
-    replacements = (
-        "RoboMaster 2026 ",
-        "RoboMaster 2025 ",
-        "机甲大师",
-        "（20260417）",
-        "（20260327）",
-        "(20260417)",
-        "(20260327)",
-    )
-    for old in replacements:
-        name = name.replace(old, "")
+    name = re.sub(r"RoboMaster\s+20\d{2}\s+", "", name)
+    name = name.replace("机甲大师", "")
+    name = re.sub(r"[（(]20\d{6}[）)]", "", name)
     name = " ".join(name.split())
     return name[:36] + "..." if len(name) > 36 else name

@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from typing import Any
 
 from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent
 
 from ..core.state import MonitorState
 from ..notifications.service import NotificationService
-from .events import (
-    DJI_CURRENT_API_URL,
-    DJI_SCHEDULE_API_URL,
-    MatchEvent,
-    detect_match_events,
-)
+from .client import MatchApiClient
+from .events import MatchEvent, detect_match_events
+from .image import MatchInfoImagePlanner, MatchInfoImageRenderer
+from .llm_query import MatchLlmQueryParser
+from .query.parser import parse_match_query
+from .query.service import MatchQueryService
+from .query.types import MatchQueryResponse, ParsedMatchQuery
+from .image.screenshot import MatchScheduleScreenshotService
 
 
 class MatchPushService:
@@ -21,35 +25,77 @@ class MatchPushService:
         config: Any,
         monitor_state: MonitorState,
         notifications: NotificationService,
+        client: MatchApiClient | None = None,
+        context: Any | None = None,
     ):
         self.config = config
+        self.context = context or getattr(config, "context", None)
         self.monitor_state = monitor_state
         self.notifications = notifications
+        self.client = client or MatchApiClient(config)
+        self.query_service = MatchQueryService(config, self.client)
+        self.llm_query = MatchLlmQueryParser(self.context, config) if self.context else None
+        self.info_image = MatchInfoImagePlanner(self.context, config)
+        self.info_image_renderer = MatchInfoImageRenderer(config)
+        self.screenshot = MatchScheduleScreenshotService(config)
         self.lock = asyncio.Lock()
 
     async def run_check(self) -> list[MatchEvent]:
         async with self.lock:
             return await self._run_check_unlocked()
 
+    async def query(
+        self,
+        text: str,
+        event: AstrMessageEvent | None = None,
+    ) -> MatchQueryResponse:
+        try:
+            parsed = await self.parse_query(event, text)
+            response = await self.query_service.query(text, parsed)
+            if self.config._config_bool("match_query_enable_info_image", False) and parsed.kind != "help":
+                response.image_payload = await self.info_image.plan(event, text, parsed, response)
+                response.image_path = await self.info_image_renderer.render(response.image_payload)
+                if not response.image_path and parsed.kind == "date" and parsed.need_image and response.is_schedule_list:
+                    response.image_path = await self.screenshot.render(parsed.date)
+            return response
+        except Exception as exc:
+            logger.warning(f"RM 赛事查询失败：{exc}\n{traceback.format_exc()}")
+            return MatchQueryResponse(f"RM 赛事查询失败：{exc}", "RM 赛事查询")
+
+    async def close(self) -> None:
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            await close()
+
+    async def query_text(self, text: str) -> str:
+        return (await self.query(text)).text
+
+    async def parse_query(
+        self,
+        event: AstrMessageEvent | None,
+        text: str,
+    ) -> ParsedMatchQuery:
+        if self.llm_query:
+            parsed = await self.llm_query.parse(event, text)
+            if parsed:
+                return parsed
+        return parse_match_query(text)
+
+    def help_text(self) -> str:
+        return self.query_service.help_text()
+
     async def _run_check_unlocked(self) -> list[MatchEvent]:
         try:
-            import httpx
+            matches = await self.client.current_matches()
         except Exception as exc:
-            logger.warning(f"RM 赛事监控缺少 httpx：{exc}")
+            logger.warning(f"RM 赛事数据请求失败：{exc}")
             return []
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                self.config._config_str("dji_current_api_url", DJI_CURRENT_API_URL)
-            )
-            resp.raise_for_status()
-            items = resp.json()
-            if not isinstance(items, list):
-                items = []
-
         previous = self.monitor_state.data.get("match_previous", {})
+        if not isinstance(previous, dict):
+            previous = {}
         zone_allowlist = self.config._config_id_set("match_zone_allowlist")
-        events, next_previous = detect_match_events(items, previous, zone_allowlist or None)
+        events, next_previous = detect_match_events(matches, previous, zone_allowlist or None)
         self.monitor_state.data["match_previous"] = next_previous
         self.monitor_state.save()
 
@@ -58,45 +104,9 @@ class MatchPushService:
         return events
 
     async def handle_event(self, event: MatchEvent) -> None:
-        data = event.match
-        if event.event_type == "match_end":
-            scheduled = await self.fetch_scheduled_match(data)
-            if scheduled:
-                data = {**data, **scheduled}
-                event.match = data
-                event.text = event.text + "\n最终比分已尝试从赛程接口补充。"
-
-        await self.notifications.notify(event.text, event.match, event.event_type)
-
-    async def fetch_scheduled_match(self, match: dict[str, Any]) -> dict[str, Any] | None:
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    self.config._config_str("dji_schedule_api_url", DJI_SCHEDULE_API_URL)
-                )
-                if resp.status_code >= 400:
-                    return None
-                schedule = resp.json()
-        except Exception as exc:
-            logger.warning(f"RM 赛程接口请求失败：{exc}")
-            return None
-        match_id = str(match.get("id") or "")
-        return find_match_by_id(schedule, match_id) if match_id else None
-
-
-def find_match_by_id(node: Any, match_id: str) -> dict[str, Any] | None:
-    if isinstance(node, dict):
-        if str(node.get("id") or "") == match_id:
-            return node
-        for value in node.values():
-            found = find_match_by_id(value, match_id)
-            if found:
-                return found
-    elif isinstance(node, list):
-        for item in node:
-            found = find_match_by_id(item, match_id)
-            if found:
-                return found
-    return None
+        await self.notifications.notify(
+            event.text,
+            event.match.raw or {},
+            event.event_type,
+            "match",
+        )

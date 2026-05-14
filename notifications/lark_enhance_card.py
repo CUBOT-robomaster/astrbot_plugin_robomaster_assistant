@@ -52,7 +52,9 @@ async def send_lark_card(
     from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
     im = getattr(lark_client, "im", None)
-    if im is None or im.v1 is None or im.v1.message is None:
+    v1 = getattr(im, "v1", None)
+    message = getattr(v1, "message", None)
+    if message is None:
         return False
 
     content = LarkCardBuilder.notification_card(text, event_type)
@@ -69,7 +71,7 @@ async def send_lark_card(
         )
         .build()
     )
-    response = await im.v1.message.acreate(request)
+    response = await message.acreate(request)
     return bool(response.success())
 
 

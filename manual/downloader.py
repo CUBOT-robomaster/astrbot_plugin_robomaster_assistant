@@ -97,7 +97,7 @@ async def download_manual_source(
 ) -> StagedManual:
     try:
         import httpx
-    except Exception as exc:
+    except ImportError as exc:
         raise ManualDownloadError(f"缺少 httpx，无法下载规则手册：{exc}") from exc
 
     await _validate_download_url(source.url)
@@ -253,10 +253,7 @@ def plan_manual_promotion(staged: StagedManual, manual_dir: Path) -> PromotionPl
 
 
 def _content_length(headers) -> int | None:
-    try:
-        value = headers.get("content-length")
-    except AttributeError:
-        value = None
+    value = headers.get("content-length")
     if not value:
         return None
     try:

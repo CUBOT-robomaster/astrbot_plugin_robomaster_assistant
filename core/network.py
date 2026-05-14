@@ -23,7 +23,7 @@ async def is_public_url(url: str, *, allowed_schemes: set[str] | None = None) ->
             addresses = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
         except OSError:
             return False
-        resolved_hosts = {item[4][0] for item in addresses if item and item[4]}
+        resolved_hosts = {item[4][0] for item in addresses if item[4]}
         if not resolved_hosts:
             return False
         return all(is_public_address(item) for item in resolved_hosts)
