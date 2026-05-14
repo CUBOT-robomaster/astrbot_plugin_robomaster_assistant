@@ -28,7 +28,7 @@ class CircuitBreaker:
             ("每分钟", SlidingWindowCounter(60), 5),
             ("每小时", SlidingWindowCounter(3600), 15),
         ]
-        self.recover_at = float(recover_at or 0)
+        self.recover_at = float(recover_at)
 
     def allow(self) -> tuple[bool, str]:
         now = time.time()
@@ -45,10 +45,6 @@ class CircuitBreaker:
                 recover = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.recover_at))
                 return False, f"{name}发送数量达到 {count}，超过最大限制 {max_count}，已熔断到 {recover}"
         return True, ""
-
-    def recovery_timestamp(self) -> float:
-        return self.recover_at
-
 
 def plain_chain(text: str) -> Any:
     return MessageChain([Comp.Plain(text)])

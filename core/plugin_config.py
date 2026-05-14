@@ -42,6 +42,7 @@ class ConfigSessionMixin:
             )
             return False
 
+        self._remember_known_session(event, session_ids)
         return True
 
     def _event_session_ids(self, event) -> set[str]:
@@ -49,6 +50,9 @@ class ConfigSessionMixin:
         for value in self._event_scope_values(event):
             self._add_id_variants(ids, value)
         return ids
+
+    def event_session_ids(self, event) -> set[str]:
+        return self._event_session_ids(event)
 
     @staticmethod
     def _event_scope_values(event) -> list[Any]:
@@ -88,8 +92,6 @@ class ConfigSessionMixin:
 
     def _config_id_set(self, key: str) -> set[str]:
         value = self._config_get(key, "")
-        if value is None:
-            return set()
         if isinstance(value, (list, tuple, set)):
             raw_items = [str(item) for item in value]
         else:
@@ -107,8 +109,6 @@ class ConfigSessionMixin:
 
     def _config_url_list(self, key: str) -> list[str]:
         value = self._config_get(key, "")
-        if value is None:
-            return []
         if isinstance(value, (list, tuple, set)):
             raw_items = [str(item) for item in value]
         else:
@@ -145,6 +145,10 @@ class ConfigSessionMixin:
             value = self._nested_config_get(group_path, key)
             if value is not _MISSING:
                 return value
+            if len(group_path) > 2:
+                value = self._nested_config_get(group_path[:2], key)
+                if value is not _MISSING:
+                    return value
         return default
 
     def _nested_config_get(self, group_path: tuple[str, ...], key: str) -> Any:
@@ -156,14 +160,19 @@ class ConfigSessionMixin:
 
         return _mapping_get(group, key)
 
+    def _remember_known_session(self, event: Any, session_ids: set[str]) -> None:
+        session = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if session:
+            self.monitor_state.remember_session_aliases(session, session_ids)
+
 
 _MISSING = object()
 
 
 def _mapping_get(mapping: Any, key: str) -> Any:
+    if isinstance(mapping, dict):
+        return mapping.get(key, _MISSING)
     getter = getattr(mapping, "get", None)
     if callable(getter):
         return getter(key, _MISSING)
-    if isinstance(mapping, dict) and key in mapping:
-        return mapping[key]
     return _MISSING

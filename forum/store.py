@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -135,10 +137,18 @@ class ForumArticleStore:
             row = conn.execute("SELECT * FROM forum_articles WHERE id = ?", (article_id,)).fetchone()
         return article_from_row(row) if row else None
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def encode_list(values: list[str]) -> str:
@@ -153,7 +163,7 @@ def decode_list(value: Any) -> list[str]:
         return [str(item) for item in value]
     try:
         data = json.loads(str(value))
-    except Exception:
+    except json.JSONDecodeError:
         return []
     if not isinstance(data, list):
         return []

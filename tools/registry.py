@@ -11,6 +11,7 @@ from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..core.constants import LAZY_REBUILD_NOTICE, NO_RESULT_TEXT
+from ..core.network import is_public_url
 
 
 SESSION_DENIED_TEXT = "当前会话不允许使用 RoboMaster 赛事助手。"
@@ -24,14 +25,19 @@ def build_llm_tools(plugin: Any) -> list[FunctionTool[AstrAgentContext]]:
         RmManualHelpTool(plugin=plugin),
         RmForumSearchTool(plugin=plugin),
         RmForumHelpTool(plugin=plugin),
+        RmMatchQueryTool(plugin=plugin),
         RmMonitorStatusTool(plugin=plugin),
         RmManualUpdateTool(plugin=plugin),
         RmManualRebuildIndexTool(plugin=plugin),
         RmForumCheckTool(plugin=plugin),
         RmForumRebuildIndexTool(plugin=plugin),
         RmForumImportJsonlTool(plugin=plugin),
-        RmNotificationSubscribeTool(plugin=plugin),
-        RmNotificationUnsubscribeTool(plugin=plugin),
+        RmAnnouncementSubscribeTool(plugin=plugin),
+        RmAnnouncementUnsubscribeTool(plugin=plugin),
+        RmMatchSubscribeTool(plugin=plugin),
+        RmMatchUnsubscribeTool(plugin=plugin),
+        RmForumSubscribeTool(plugin=plugin),
+        RmForumUnsubscribeTool(plugin=plugin),
         RmAnnouncementCheckTool(plugin=plugin),
         RmMatchCheckTool(plugin=plugin),
     ]
@@ -168,6 +174,34 @@ class RmForumHelpTool(RmBaseTool):
 
 
 @dataclass(config={"arbitrary_types_allowed": True})
+class RmMatchQueryTool(RmBaseTool):
+    name: str = "rm_match_query"
+    description: str = "查询 RoboMaster 赛程、比分、战队、回放、投票和历史交手。"
+    parameters: dict = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "查询内容，可直接写自然语言问题，例如 今天有哪些比赛、华南理工下一场什么时候、南部赛区第12场是谁打谁。",
+                },
+            },
+            "required": ["query"],
+        }
+    )
+
+    async def call(
+        self,
+        context: ContextWrapper[AstrAgentContext],
+        **kwargs: Any,
+    ) -> ToolExecResult:
+        if error := self.permission_error(context):
+            return error
+        query = str(kwargs.get("query") or "").strip()
+        return await self.plugin.match_push.query_text(query)
+
+
+@dataclass(config={"arbitrary_types_allowed": True})
 class RmMonitorStatusTool(RmBaseTool):
     name: str = "rm_monitor_status"
     description: str = "查看 RM 公告、赛事、论坛、订阅和后台任务状态。"
@@ -210,6 +244,8 @@ class RmManualUpdateTool(RmBaseTool):
         pdf_url = str(kwargs.get("pdf_url") or "").strip()
         if not pdf_url:
             return "请提供规则手册 PDF 的 HTTPS 下载链接。"
+        if not await is_public_url(pdf_url, allowed_schemes={"https"}):
+            return "请提供可公开访问的 HTTPS PDF 下载链接。"
         messages = [message async for message in self.plugin.manual.update_from_text(pdf_url)]
         return "\n\n".join(messages)
 
@@ -283,47 +319,102 @@ class RmForumImportJsonlTool(RmBaseTool):
         return f"RM 开源导入完成\n读取行：{seen}\n新增文章：{inserted}"
 
 
+async def subscribe_channel_tool(
+    plugin: Any,
+    context: ContextWrapper[AstrAgentContext],
+    base: RmBaseTool,
+    channel: str,
+    label: str,
+) -> str:
+    if error := base.permission_error(context, admin=True):
+        return error
+    event = base.event_from_context(context)
+    session = getattr(event, "unified_msg_origin", "")
+    if not session:
+        return "订阅失败：无法获取当前会话 ID。"
+    added, lark_card_hint = plugin.notifications.subscribe_session(
+        channel,
+        event,
+        session,
+        plugin.event_session_ids(event),
+    )
+    suffix = "\n已记录飞书卡片运行时信息。" if lark_card_hint else ""
+    return (f"已订阅 RM {label}通知。" if added else f"当前会话已订阅 RM {label}通知。") + suffix
+
+
+async def unsubscribe_channel_tool(
+    plugin: Any,
+    context: ContextWrapper[AstrAgentContext],
+    base: RmBaseTool,
+    channel: str,
+    label: str,
+) -> str:
+    if error := base.permission_error(context, admin=True):
+        return error
+    event = base.event_from_context(context)
+    session = getattr(event, "unified_msg_origin", "")
+    removed = plugin.notifications.unsubscribe_session(channel, session)
+    return f"已取消订阅 RM {label}通知。" if removed else f"当前会话未订阅 RM {label}通知。"
+
+
 @dataclass(config={"arbitrary_types_allowed": True})
-class RmNotificationSubscribeTool(RmBaseTool):
-    name: str = "rm_notification_subscribe"
-    description: str = "管理员工具：订阅当前会话接收 RM 公告、赛事和论坛开源通知。"
+class RmAnnouncementSubscribeTool(RmBaseTool):
+    name: str = "rm_announcement_subscribe"
+    description: str = "管理员工具：订阅当前会话接收 RM 公告通知。"
     parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
 
-    async def call(
-        self,
-        context: ContextWrapper[AstrAgentContext],
-        **kwargs: Any,
-    ) -> ToolExecResult:
-        if error := self.permission_error(context, admin=True):
-            return error
-        event = self.event_from_context(context)
-        session = getattr(event, "unified_msg_origin", "")
-        if not session:
-            return "订阅失败：无法获取当前会话 ID。"
-        added = self.plugin.monitor_state.add_session(session)
-        lark_card_hint = self.plugin.notifications.remember_lark_runtime(event, session)
-        suffix = "\n已记录飞书卡片运行时信息。" if lark_card_hint else ""
-        return ("已订阅 RM 通知。" if added else "当前会话已订阅 RM 通知。") + suffix
+    async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
+        return await subscribe_channel_tool(self.plugin, context, self, "announcement", "公告")
 
 
 @dataclass(config={"arbitrary_types_allowed": True})
-class RmNotificationUnsubscribeTool(RmBaseTool):
-    name: str = "rm_notification_unsubscribe"
-    description: str = "管理员工具：取消当前会话的 RM 通知订阅。"
+class RmAnnouncementUnsubscribeTool(RmBaseTool):
+    name: str = "rm_announcement_unsubscribe"
+    description: str = "管理员工具：取消当前会话的 RM 公告通知订阅。"
     parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
 
-    async def call(
-        self,
-        context: ContextWrapper[AstrAgentContext],
-        **kwargs: Any,
-    ) -> ToolExecResult:
-        if error := self.permission_error(context, admin=True):
-            return error
-        event = self.event_from_context(context)
-        session = getattr(event, "unified_msg_origin", "")
-        removed = self.plugin.monitor_state.remove_session(session)
-        self.plugin._lark_clients.pop(session, None)
-        return "已取消订阅 RM 通知。" if removed else "当前会话未订阅 RM 通知。"
+    async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
+        return await unsubscribe_channel_tool(self.plugin, context, self, "announcement", "公告")
+
+
+@dataclass(config={"arbitrary_types_allowed": True})
+class RmMatchSubscribeTool(RmBaseTool):
+    name: str = "rm_match_subscribe"
+    description: str = "管理员工具：订阅当前会话接收 RM 赛事通知。"
+    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+
+    async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
+        return await subscribe_channel_tool(self.plugin, context, self, "match", "赛事")
+
+
+@dataclass(config={"arbitrary_types_allowed": True})
+class RmMatchUnsubscribeTool(RmBaseTool):
+    name: str = "rm_match_unsubscribe"
+    description: str = "管理员工具：取消当前会话的 RM 赛事通知订阅。"
+    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+
+    async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
+        return await unsubscribe_channel_tool(self.plugin, context, self, "match", "赛事")
+
+
+@dataclass(config={"arbitrary_types_allowed": True})
+class RmForumSubscribeTool(RmBaseTool):
+    name: str = "rm_forum_subscribe"
+    description: str = "管理员工具：订阅当前会话接收 RM 论坛开源通知。"
+    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+
+    async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
+        return await subscribe_channel_tool(self.plugin, context, self, "forum", "开源")
+
+
+@dataclass(config={"arbitrary_types_allowed": True})
+class RmForumUnsubscribeTool(RmBaseTool):
+    name: str = "rm_forum_unsubscribe"
+    description: str = "管理员工具：取消当前会话的 RM 论坛开源通知订阅。"
+    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+
+    async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
+        return await unsubscribe_channel_tool(self.plugin, context, self, "forum", "开源")
 
 
 @dataclass(config={"arbitrary_types_allowed": True})

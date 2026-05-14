@@ -31,6 +31,18 @@ def plugin_state_path() -> Path:
     return plugin_data_dir() / "rm_monitor_state.json"
 
 
+def plugin_image_dir() -> Path:
+    return plugin_data_dir() / "images"
+
+
+def plugin_manual_image_dir() -> Path:
+    return plugin_image_dir() / "manual"
+
+
+def plugin_match_image_dir() -> Path:
+    return plugin_image_dir() / "match"
+
+
 def plugin_forum_dir() -> Path:
     return plugin_data_dir() / "forum"
 

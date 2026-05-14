@@ -10,22 +10,27 @@ from ..core.state import MonitorState
 from .service import NotificationService
 
 
+CHANNEL_LABELS = {
+    "announcement": "公告",
+    "match": "赛事",
+    "forum": "开源",
+}
+
+
 class NotificationCommandHandler:
     def __init__(
         self,
         plugin: Any,
         monitor_state: MonitorState,
         notifications: NotificationService,
-        lark_clients: dict[str, Any],
         background_tasks: BackgroundTaskManager,
     ):
         self.plugin = plugin
         self.monitor_state = monitor_state
         self.notifications = notifications
-        self.lark_clients = lark_clients
         self.background_tasks = background_tasks
 
-    async def subscribe(self, event: AstrMessageEvent) -> AsyncIterator[Any]:
+    async def subscribe(self, event: AstrMessageEvent, channel: str) -> AsyncIterator[Any]:
         if not self.plugin._is_session_allowed(event):
             return
         self.plugin._stop_event(event)
@@ -33,21 +38,29 @@ class NotificationCommandHandler:
         if not session:
             yield event.plain_result("订阅失败：无法获取当前会话 ID。")
             return
-        added = self.monitor_state.add_session(session)
-        lark_card_hint = self.notifications.remember_lark_runtime(event, session)
+        label = CHANNEL_LABELS.get(channel, channel)
+        added, lark_card_hint = self.notifications.subscribe_session(
+            channel,
+            event,
+            session,
+            self.plugin.event_session_ids(event),
+        )
         suffix = "\n已记录飞书卡片运行时信息。" if lark_card_hint else ""
         yield event.plain_result(
-            ("已订阅 RM 通知。" if added else "当前会话已订阅 RM 通知。") + suffix
+            (f"已订阅 RM {label}通知。" if added else f"当前会话已订阅 RM {label}通知。")
+            + suffix
         )
 
-    async def unsubscribe(self, event: AstrMessageEvent) -> AsyncIterator[Any]:
+    async def unsubscribe(self, event: AstrMessageEvent, channel: str) -> AsyncIterator[Any]:
         if not self.plugin._is_session_allowed(event):
             return
         self.plugin._stop_event(event)
         session = getattr(event, "unified_msg_origin", "")
-        removed = self.monitor_state.remove_session(session)
-        self.lark_clients.pop(session, None)
-        yield event.plain_result("已取消订阅 RM 通知。" if removed else "当前会话未订阅 RM 通知。")
+        label = CHANNEL_LABELS.get(channel, channel)
+        removed = self.notifications.unsubscribe_session(channel, session)
+        yield event.plain_result(
+            f"已取消订阅 RM {label}通知。" if removed else f"当前会话未订阅 RM {label}通知。"
+        )
 
     async def status(self, event: AstrMessageEvent) -> AsyncIterator[Any]:
         if not self.plugin._is_session_allowed(event):

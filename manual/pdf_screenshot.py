@@ -25,7 +25,7 @@ def render_pdf_page(
 ) -> Path:
     try:
         import fitz
-    except Exception as exc:  # pragma: no cover - dependency may be unavailable
+    except ImportError as exc:  # pragma: no cover - dependency may be unavailable
         raise PdfScreenshotError(f"缺少 PyMuPDF 依赖或导入失败：{exc}") from exc
 
     source = Path(pdf_path)

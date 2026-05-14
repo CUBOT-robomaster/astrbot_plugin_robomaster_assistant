@@ -8,6 +8,7 @@ from astrbot.api import logger
 from ..core.state import MonitorState
 from ..notifications.service import NotificationService
 from .models import (
+    AnnouncementPage,
     AnnouncementEvent,
     announcement_url,
     format_announcement_event,
@@ -35,7 +36,7 @@ class AnnouncementService:
     async def _run_check_unlocked(self) -> list[AnnouncementEvent]:
         try:
             import httpx
-        except Exception as exc:
+        except ImportError as exc:
             logger.warning(f"RM 公告监控缺少 httpx：{exc}")
             return []
 
@@ -60,6 +61,7 @@ class AnnouncementService:
                             event.text,
                             {"id": next_id, "title": page.title, "url": page.url},
                             event.event_type,
+                            "announcement",
                         )
 
             page_hashes = dict(self.monitor_state.data.get("announce_page_hashes", {}))
@@ -77,12 +79,13 @@ class AnnouncementService:
                         event.text,
                         {"id": page_id, "title": page.title, "url": page.url},
                         event.event_type,
+                        "announcement",
                     )
             self.monitor_state.data["announce_page_hashes"] = page_hashes
             self.monitor_state.save()
         return events
 
-    async def fetch_page(self, client: Any, announcement_id: int):
+    async def fetch_page(self, client: Any, announcement_id: int) -> AnnouncementPage | None:
         resp = await client.get(announcement_url(announcement_id))
         if resp.status_code == 404:
             return None
